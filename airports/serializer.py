@@ -5,5 +5,5 @@ class TicketSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Ticket
-        fields = ("id", "status", "seat", "trip")
-        read_only_fields = ("id", "status")
+        fields = ("id", "status", "seat", "trip",)
+        read_only_fields = ("id",)
