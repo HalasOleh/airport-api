@@ -99,15 +99,15 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'Europe/Kyiv'
 
 USE_I18N = True
 
-USE_TZ = False
+USE_TZ = True
 
+DATE_FORMAT = "d/m/Y"
 
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/6.0/howto/static-files/
+DATETIME_FORMAT = "d/m/Y"
 
 STATIC_URL = 'static/'
 
@@ -122,4 +122,16 @@ SPECTACULAR_SETTINGS = {
     'DESCRIPTION': 'By tickets',
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
+}
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {
+        "console": {"class": "logging.StreamHandler"},
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": "INFO",
+    },
 }

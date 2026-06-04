@@ -1,9 +1,9 @@
 from django.db import models
+from django.conf import settings
 
 
 class Country(models.Model):
     name = models.CharField(max_length=31)
-    airports = models.ForeignKey("Airport", on_delete=models.CASCADE)
     visa_required = models.BooleanField(default=False)
 
     def __str__(self):
@@ -11,21 +11,29 @@ class Country(models.Model):
 
 
 class Airport(models.Model):
-    city = models.CharField(max_length=64)
-    name = models.CharField(max_length=63)
+    city = models.CharField(max_length=63)
     code = models.CharField(max_length=5, unique=True)
-    airlines = models.ForeignKey("Airline", on_delete=models.CASCADE)
+
+    country = models.ForeignKey(
+    "Country",
+        on_delete=models.CASCADE,
+        related_name="airports"
+    )
 
     def __str__(self):
-        return self.name
+        return f"{self.city} ({self.code})"
 
 
 class Airline(models.Model):
+
     name = models.CharField(max_length=63)
     founded_year = models.IntegerField(null=True, blank=True)
-
     headquarters = models.CharField(max_length=128)
-    airplanes = models.ForeignKey("Airplane", on_delete=models.CASCADE)
+
+    airport = models.ForeignKey(
+        "Airport",
+        on_delete=models.CASCADE,
+        related_name="airlines")
 
     def __str__(self):
         return self.name
@@ -35,52 +43,71 @@ class Airplane(models.Model):
     model = models.CharField(max_length=63)
     num_seats = models.IntegerField()
 
-    flights = models.ForeignKey("Flight", on_delete=models.CASCADE, related_name="flights")
+    airline = models.ForeignKey(
+        "Airline",
+        on_delete=models.CASCADE,
+        related_name="airplanes")
 
     def __str__(self):
-        return self.namej
+        return f"{self.model} ({self.num_seats} seats)"
 
 
 class Flight(models.Model):
     class Status(models.TextChoices):
-        SCHEDULED = "SCHEDULED", "Scheduled",
-        BOARDING = "BOARDING", "Boarding",
-        DEPARTED = "DEPARTED", "Departed",
-        DELAYED = "SENIOR", "Senior",
-        CANCELLED = "CANCELLED", "Cancelled",
+        SCHEDULED = "SCHEDULED", "Scheduled"
+        BOARDING = "BOARDING", "Boarding"
+        DEPARTED = "DEPARTED", "Departed"
+        DELAYED = "DELAYED", "Delayed"
+        CANCELLED = "CANCELLED", "Cancelled"
 
     status = models.CharField(
-        max_length=9,
+        max_length=15,
         choices=Status.choices,
         default=Status.SCHEDULED,
     )
 
-    source = models.CharField(max_length=63)
-    destination = models.CharField(max_length=63)
+    trip = models.CharField(max_length=63)
 
     departure = models.DateTimeField()
     arrival = models.DateTimeField()
 
-    tickets = models.ForeignKey("Ticket", on_delete=models.CASCADE, related_name="flights")
+    airplane = models.ForeignKey(
+        "Airplane",
+        on_delete=models.CASCADE,
+        related_name="flights",
+        null = True,
+        blank = True,
+    )
 
     def __str__(self):
-        return f"{self.name}: {self.status}"
+        return f"{self.trip}: {self.status}"
 
 
 class Ticket(models.Model):
     class Status(models.TextChoices):
-        BOOKED = "BOOKED", "Booked",
-        CANCELLED = "CANCELLED", "Cancelled",
-        USED = "USED", "Used",
+        BOOKED = "BOOKED", "Booked"
+        CANCELLED = "CANCELLED", "Cancelled"
+        USED = "USED", "Used"
 
     status = models.CharField(
-        max_length=9,
-        choices=Status,
+        max_length=15,
         default=Status.BOOKED,
+        choices=Status.choices,
+
     )
 
-    seat = models.IntegerField()
-    trip = models.CharField(max_length=127)
+    seat = models.IntegerField(unique=True)
+
+    flight = models.ForeignKey(
+        "Flight",
+        on_delete=models.CASCADE,
+        related_name="tickets")
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="tickets"
+    )
 
     def __str__(self):
-        return f"{self.name} {self.seat}"
+        return f"Flight {self.flight.trip} | Seat {self.seat} | {self.status}"
