@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from airports.models import Ticket, Country, Airport, Airline, Airplane, Flight
+from airports.models import Ticket, Country, Airport, Airline, Airplane, Flight, City
 import logging
 
 logger = logging.getLogger(__name__)
@@ -8,43 +8,42 @@ logger = logging.getLogger(__name__)
 class CountrySerializer(serializers.ModelSerializer):
     class Meta:
         model = Country
-        fields = ("id", "name", "visa_required")
+        fields = ("id", "name", "code")
+        read_only_fields = ("id",)
+
+
+class City(serializers.ModelSerializer):
+    class Meta:
+        model = City
+        fields = ("id", "name", "country")
         read_only_fields = ("id",)
 
 
 class AirportSerializer(serializers.ModelSerializer):
     class Meta:
         model = Airport
-        fields = ("id", "city", "code", "country")
+        fields = ("id", "city", "code")
         read_only_fields = ("id",)
 
 
 class AirlineSerializer(serializers.ModelSerializer):
-
     class Meta:
         model = Airline
-        fields = ("id", "name", "founded_year", "headquarters", "airport")
+        fields = ("id", "name", "founded_year", "headquarters", "airport", "country")
         read_only_fields = ("id",)
 
 
 class AirplaneSerializer(serializers.ModelSerializer):
     class Meta:
         model = Airplane
-        fields = ("id", "model", "num_seats", "airline")
+        fields = ("id", "model", "airline", "reg_number" ,"seats")
         read_only_fields = ("id",)
 
 
 class FlightSerializer(serializers.ModelSerializer):
-    departure = serializers.DateTimeField(
-        input_formats=["%d/%m/%Y"]
-    )
-    arrival = serializers.DateTimeField(
-        input_formats=["%d/%m/%Y"]
-    )
-
     class Meta:
         model = Flight
-        fields = ("id", "status", "trip", "departure", "arrival", "airplane")
+        fields = ("id", "status", "from_airport", "to_airport","departure", "arrival", "airplane")
         read_only_fields = ("id",)
 
     def validate(self, data):
@@ -65,5 +64,5 @@ class TicketSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Ticket
-        fields = ("id", "status", "seat", "flight", "user")
+        fields = ("id", "status", "flight", "user")
         read_only_fields = ("id", "status")
