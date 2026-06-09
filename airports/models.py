@@ -4,18 +4,27 @@ from django.conf import settings
 
 class Country(models.Model):
     name = models.CharField(max_length=31)
-    visa_required = models.BooleanField(default=False)
+    code = models.CharField(max_length=2, unique=True) #  UA, US, FR
 
     def __str__(self):
         return self.name
 
+class City(models.Model):
+    name = models.CharField(max_length=63)
+    country = models.ForeignKey(
+        "Country",
+        on_delete=models.CASCADE,
+        related_name="cities"
+    )
+
+    def __str__(self):
+        return f"{self.name} ({self.country})"
 
 class Airport(models.Model):
-    city = models.CharField(max_length=63)
-    code = models.CharField(max_length=5, unique=True)
 
-    country = models.ForeignKey(
-    "Country",
+    code = models.CharField(max_length=5, unique=True)
+    city = models.ForeignKey(
+    "City",
         on_delete=models.CASCADE,
         related_name="airports"
     )
@@ -30,18 +39,24 @@ class Airline(models.Model):
     founded_year = models.IntegerField(null=True, blank=True)
     headquarters = models.CharField(max_length=128)
 
-    airport = models.ForeignKey(
-        "Airport",
+    country = models.ForeignKey(
+        "Country",
         on_delete=models.CASCADE,
         related_name="airlines")
+
+    airport = models.ManyToManyField(
+        "Airport",
+        related_name="airlines"
+    )
 
     def __str__(self):
         return self.name
 
 
 class Airplane(models.Model):
+
     model = models.CharField(max_length=63)
-    num_seats = models.IntegerField()
+    reg_number = models.CharField(max_length=15, unique=True)
 
     airline = models.ForeignKey(
         "Airline",
@@ -49,7 +64,7 @@ class Airplane(models.Model):
         related_name="airplanes")
 
     def __str__(self):
-        return f"{self.model} ({self.num_seats} seats)"
+        return self.model
 
 
 class Flight(models.Model):
@@ -66,7 +81,17 @@ class Flight(models.Model):
         default=Status.SCHEDULED,
     )
 
-    trip = models.CharField(max_length=63)
+    from_airport = models.ForeignKey(
+        "Airport",
+        on_delete=models.CASCADE,
+        related_name="from_airport"
+    )
+
+    to_airport = models.ForeignKey(
+        "Airport",
+        on_delete=models.CASCADE,
+        related_name="to_airport"
+    )
 
     departure = models.DateTimeField()
     arrival = models.DateTimeField()
@@ -80,7 +105,7 @@ class Flight(models.Model):
     )
 
     def __str__(self):
-        return f"{self.trip}: {self.status}"
+        return f"{self.from_airport} - {self.to_airport}: {self.status}"
 
 
 class Ticket(models.Model):
@@ -96,7 +121,15 @@ class Ticket(models.Model):
 
     )
 
-    seat = models.IntegerField(unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    seat = models.ForeignKey(
+        "Seat",
+        on_delete=models.CASCADE,
+        related_name="tickets",
+        null=True,
+        blank=True,
+    )
 
     flight = models.ForeignKey(
         "Flight",
@@ -109,5 +142,33 @@ class Ticket(models.Model):
         related_name="tickets"
     )
 
+
     def __str__(self):
-        return f"Flight {self.flight.trip} | Seat {self.seat} | {self.status}"
+        return f"Ticket #{self.id}| {self.flight} | {self.status}"
+
+
+class Seat(models.Model):
+
+    latter = models.CharField(max_length=1)
+    num_seat = models.IntegerField()
+    seat_in_row = models.IntegerField()
+    rows = models.IntegerField()
+
+    class_type = models.CharField(max_length=15)
+
+    airplane = models.ForeignKey(
+        "Airplane",
+        on_delete=models.CASCADE,
+        related_name="seats"
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["num_seat", "airplane"],
+                name="unique_seat"
+            )
+        ]
+
+    def __str__(self):
+        return f"num_seat {self.num_seat}{self.latter} | {self.airplane}"
