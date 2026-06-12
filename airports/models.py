@@ -20,11 +20,18 @@ class City(models.Model):
     def __str__(self):
         return f"{self.name} ({self.country})"
 
+
 class Airport(models.Model):
 
     code = models.CharField(max_length=5, unique=True)
+    country = models.ForeignKey(
+        "Country",
+        on_delete=models.CASCADE,
+        related_name="airports"
+    )
+
     city = models.ForeignKey(
-    "City",
+        "City",
         on_delete=models.CASCADE,
         related_name="airports"
     )
@@ -53,10 +60,56 @@ class Airline(models.Model):
         return self.name
 
 
+class SeatClass(models.TextChoices):
+
+    ECONOMY = "ECONOMY", "Economy"
+    BUSINESS = "BUSINESS", "Business"
+    FIRST = "FIRST", "First"
+
+
+class SeatType(models.Model):
+    seat_class = models.CharField(
+        max_length=15,
+        choices=SeatClass.choices,
+        default=SeatClass.ECONOMY,
+    )
+    
+    num_seats = models.IntegerField()
+    num_rows = models.IntegerField()
+    seats_in_row = models.IntegerField()
+
+
+    def save(self, *args, **kwargs):
+        is_new = self.pk is None
+        super().save(*args, **kwargs)
+        if is_new:
+            self.create_seats()
+
+    def create_seats(self):
+        for i in range(1, self.num_seats + 1):
+            Seat.objects.create(
+                seat_number=str(i),
+                row=(i - 1) // self.seats_in_row + 1,
+                seat_class=self.seat_class,
+                airplane=self
+            )
+    def __str__(self):
+        return f"Class type {self.seat_class}| numbers of seats {self.num_seats}"
+
+
 class Airplane(models.Model):
 
     model = models.CharField(max_length=63)
     reg_number = models.CharField(max_length=15, unique=True)
+
+
+    seat_type = models.ForeignKey(
+        "SeatType",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True
+    )
+
 
     airline = models.ForeignKey(
         "Airline",
@@ -65,6 +118,7 @@ class Airplane(models.Model):
 
     def __str__(self):
         return self.model
+
 
 
 class Flight(models.Model):
@@ -100,8 +154,8 @@ class Flight(models.Model):
         "Airplane",
         on_delete=models.CASCADE,
         related_name="flights",
-        null = True,
-        blank = True,
+        null=True,
+        blank=True,
     )
 
     def __str__(self):
@@ -149,12 +203,14 @@ class Ticket(models.Model):
 
 class Seat(models.Model):
 
-    latter = models.CharField(max_length=1)
-    num_seat = models.IntegerField()
-    seat_in_row = models.IntegerField()
-    rows = models.IntegerField()
+    seat_number = models.CharField(max_length=5)
+    row = models.IntegerField()
 
-    class_type = models.CharField(max_length=15)
+    seat_class = models.CharField(
+        max_length=15,
+        choices=SeatClass.choices,
+        default=SeatClass.ECONOMY,
+    )
 
     airplane = models.ForeignKey(
         "Airplane",
@@ -165,10 +221,10 @@ class Seat(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["num_seat", "airplane"],
+                fields=["seat_number", "airplane"],
                 name="unique_seat"
             )
         ]
 
     def __str__(self):
-        return f"num_seat {self.num_seat}{self.latter} | {self.airplane}"
+        return f"Seat {self.seat_number} (row {self.row}) | {self.airplane}"
