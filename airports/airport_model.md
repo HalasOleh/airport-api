@@ -1,40 +1,46 @@
-# Airport Project Models
+# Airport Project - Models Diagram
 
 ```mermaid
 erDiagram
     COUNTRY ||--o{ CITY : "has"
-    COUNTRY ||--o{ AIRLINE : "headquarters"
+    COUNTRY ||--o{ AIRPORT : "located_in"
+    COUNTRY ||--o{ AIRLINE : "based_in"
+
     CITY ||--o{ AIRPORT : "has"
-    AIRPORT ||--o{ AIRLINE : "operates_at"
+
+    AIRPORT }o--o{ AIRLINE : "serves"
     AIRLINE ||--o{ AIRPLANE : "owns"
-    SEATCLASS ||--o{ AIRPLANE : "defines"
-    SEATCLASS ||--o{ SEAT : "classifies"
+
+    SEATTYPE }o--o{ AIRPLANE : "configured_for"
     AIRPLANE ||--o{ SEAT : "contains"
-    AIRPLANE ||--o{ FLIGHT : "uses"
-    AIRPORT ||--o{ FLIGHT : "departure"
-    AIRPORT ||--o{ FLIGHT : "arrival"
+    AIRPLANE ||--o{ FLIGHT : "used_for"
+
+    AIRPORT ||--o{ FLIGHT : "departure_airport"
+    AIRPORT ||--o{ FLIGHT : "arrival_airport"
+
     FLIGHT ||--o{ TICKET : "has"
-    SEAT ||--o{ TICKET : "assigned"
-    USER ||--o{ TICKET : "purchases"
+    SEAT ||--o{ TICKET : "assigned_to"
+    USER ||--o{ TICKET : "buys"
 
     COUNTRY {
         int id
         string name
         string code
     }
-    
+
     CITY {
         int id
         string name
         int country_id
     }
-    
+
     AIRPORT {
         int id
         string code
+        int country_id
         int city_id
     }
-    
+
     AIRLINE {
         int id
         string name
@@ -42,22 +48,30 @@ erDiagram
         string headquarters
         int country_id
     }
-    
-    SEATCLASS {
-        string class_type
+
+    SEATTYPE {
+        int id
+        string seat_class
+        int num_seats
+        int num_rows
+        int seats_in_row
     }
-    
+
     AIRPLANE {
         int id
         string model
         string reg_number
-        int num_seats
-        int num_rows
-        int seats_in_row
-        string seat_class
         int airline_id
     }
-    
+
+    SEAT {
+        int id
+        string seat_number
+        int row
+        string seat_class
+        int airplane_id
+    }
+
     FLIGHT {
         int id
         string status
@@ -67,15 +81,7 @@ erDiagram
         int to_airport_id
         int airplane_id
     }
-    
-    SEAT {
-        int id
-        string seat_number
-        int row
-        string seat_class
-        int airplane_id
-    }
-    
+
     TICKET {
         int id
         string status
@@ -84,9 +90,15 @@ erDiagram
         int flight_id
         int user_id
     }
-    
+
     USER {
         int id
         string username
+        string role
     }
 ```
+
+## Changes from previous version:
+- `SeatType` response to manage seat class, create seat
+- `Airport` add FK to `Country`
+- `Airplane` references `SeatType` own seat fields

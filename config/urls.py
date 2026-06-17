@@ -4,7 +4,7 @@ from django.urls import path, include
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path("api/airports/", include("airports.urls", namespace="airports")),
+    path("", include("airports.urls", namespace="airports")),
 
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
 
