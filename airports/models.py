@@ -1,7 +1,5 @@
 from django.db import models
-from django.conf import settings
 from django.core.validators import RegexValidator
-from tickets.models import Ticket
 
 class Country(models.Model):
     name = models.CharField(max_length=31, unique=True)
@@ -95,19 +93,33 @@ class SeatType(models.Model):
         default=SeatClass.ECONOMY,
     )
 
+    airplane = models.ForeignKey(
+        "Airplane",
+        on_delete=models.CASCADE,
+        related_name="seat_type"
+    )
+
     num_seats = models.IntegerField()
     num_rows = models.IntegerField()
     seats_in_row = models.IntegerField()
 
+    def save(self, *args, **kwargs):
+        is_new = self.pk is None
+        super().save(*args, **kwargs)
+        if is_new:
+            self.create_seats()
+
     def create_seats(self):
-        for i in range(1, self.num_seats + 1):
+        start_number = self.airplane.seats.count() + 1
+
+        for i in range(start_number, start_number + self.num_seats):
             Seat.objects.create(
-                seat_number=str(i),
-                row=(i - 1) // self.seats_in_row + 1,
+                seat_number=i,
+                row=(i - start_number) // self.seats_in_row + 1,
                 seat_class=self.seat_class,
                 airplane=self.airplane
             )
-
+    
     def __str__(self):
         return f"Class type {self.get_seat_class_display()}| numbers of seats {self.num_seats}| id {self.id}"
 
@@ -117,21 +129,11 @@ class Airplane(models.Model):
     model = models.CharField(max_length=63)
     reg_number = models.CharField(max_length=15, unique=True)
 
-    seat_type = models.ManyToManyField(
-        "SeatType",
-        related_name="airplanes"
-    )
-
     airline = models.ForeignKey(
         "Airline",
         on_delete=models.CASCADE,
         related_name="airplanes")
 
-    def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)
-        is_new = self.pk is None
-        if is_new:
-            self.create_seats()
 
     def __str__(self):
         return self.model
@@ -206,3 +208,5 @@ class Flight(models.Model):
 
     def __str__(self):
         return f"{self.from_airport} - {self.to_airport}: {self.status}"
+
+

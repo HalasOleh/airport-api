@@ -1,5 +1,3 @@
-from django.db import models
-
 from django.conf import settings
 from django.db import models
 
@@ -20,7 +18,7 @@ class Ticket(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     seat = models.ForeignKey(
-        "Seat",
+        "airports.Seat",
         on_delete=models.CASCADE,
         related_name="tickets",
         null=True,
@@ -28,7 +26,7 @@ class Ticket(models.Model):
     )
 
     flight = models.ForeignKey(
-        "Flight",
+        "airports.Flight",
         on_delete=models.CASCADE,
         related_name="tickets")
 
