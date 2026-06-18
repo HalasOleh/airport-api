@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from airports.models import SeatType, Ticket, Country, Airport, Airline, Airplane, Flight, City
+from airports.models import Seat, SeatType, Ticket, Country, Airport, Airline, Airplane, Flight, City
 import logging
 
 logger = logging.getLogger(__name__)
@@ -13,6 +13,11 @@ class CountrySerializer(serializers.ModelSerializer):
 
 
 class CitySerializer(serializers.ModelSerializer):
+    country = serializers.SlugRelatedField(
+        slug_field="name",
+        queryset=Country.objects.all(),
+    )
+
     class Meta:
         model = City
         fields = ("id", "name", "country")
@@ -20,6 +25,17 @@ class CitySerializer(serializers.ModelSerializer):
 
 
 class AirportSerializer(serializers.ModelSerializer):
+
+    city = serializers.SlugRelatedField(
+        slug_field="name",
+        queryset=City.objects.all(),
+    )
+
+    country = serializers.SlugRelatedField(
+        slug_field="name",
+        queryset=Country.objects.all(),
+    )
+
     class Meta:
         model = Airport
         fields = ("id", "city", "code", "country")
@@ -27,6 +43,17 @@ class AirportSerializer(serializers.ModelSerializer):
 
 
 class AirlineSerializer(serializers.ModelSerializer):
+    airport = serializers.SlugRelatedField(
+        slug_field="code",
+        queryset=Airport.objects.all(),
+        many=True,
+    )
+
+    country = serializers.SlugRelatedField(
+        slug_field="name",
+        queryset=Country.objects.all(),
+    )
+
     class Meta:
         model = Airline
         fields = ("id", "name", "founded_year", "headquarters", "airport", "country")
@@ -40,34 +67,71 @@ class SeatTypeSerializer(serializers.ModelSerializer):
         read_only_fields = ("id",)
 
     def validate(self, data):
-        if data["num_seats"] != data["num_rows"] * data["seats_in_row"]:
-            raise serializers.ValidationError("Incorrect number of seats")
+        num_seats = data.get("num_seats")
+        num_rows = data.get("num_rows")
+        seats_in_row = data.get("seats_in_row")
+
+        if num_seats != seats_in_row * num_rows:
+            raise serializers.ValidationError(
+                f"Number of seats {num_seats} must be equal to number of rows * seats in row"
+            )
         return data
 
 
+class ShortSeatTypeSerializer(SeatTypeSerializer):
+    class Meta:
+        model = SeatType
+        fields = ("seat_class", "num_seats")
+        read_only_fields = ("id",)
+
+
 class AirplaneSerializer(serializers.ModelSerializer):
-    # nested read representation
-    seat_type = SeatTypeSerializer(read_only=True)
-    # writable reference for creating/updating
-    seat_type_id = serializers.PrimaryKeyRelatedField(
-        queryset=SeatType.objects.all(), write_only=True, source='seat_type', allow_null=True, required=False
+    airline = serializers.StringRelatedField(read_only=True)
+    airline_name = serializers.PrimaryKeyRelatedField(
+        queryset=Airline.objects.all(),
+        source="airline",
+        write_only=True,
     )
 
     class Meta:
         model = Airplane
-        fields = ("id", "model", "reg_number", "seat_type", "seat_type_id", "airline")
+        fields = ("id", "model", "airline", "reg_number", "seat_type", "airline_name")
         read_only_fields = ("id",)
 
     def create(self, validated_data):
-        # `seat_type` will be set by `seat_type_id` via source mapping
-        return Airplane.objects.create(**validated_data)
+        seat_types = validated_data.pop("seat_type")
+        airplane = Airplane.objects.create(**validated_data)
+        airplane.seat_type.set(seat_types)
+        return airplane
 
-    
+
+class AirplaneRetrieveSerializer(AirplaneSerializer):
+    seat_type = SeatTypeSerializer(many=True, read_only=True)
+
+
+class AirplaneListSerializer(AirplaneSerializer):
+    seat_type = ShortSeatTypeSerializer(many=True, read_only=True)
+
+ 
 class FlightSerializer(serializers.ModelSerializer):
+    from_airport = serializers.SlugRelatedField(
+        slug_field="code",
+        queryset=Airport.objects.all(),
+    )
+    to_airport = serializers.SlugRelatedField(
+        slug_field="code",
+        queryset=Airport.objects.all(),
+    )
+    airplane = serializers.SlugRelatedField(
+        slug_field="reg_number",
+        queryset=Airplane.objects.all(),
+    )
+
     class Meta:
         model = Flight
         fields = ("id", "status", "from_airport", "to_airport", "departure", "arrival", "airplane")
         read_only_fields = ("id",)
+
 
     def validate(self, data):
         departure = data.get("departure")
@@ -83,9 +147,9 @@ class FlightSerializer(serializers.ModelSerializer):
         return data
 
 
-class TicketSerializer(serializers.ModelSerializer):
 
+class SeatSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Ticket
-        fields = ("id", "status", "created_at", "seat", "flight", "user")
-        read_only_fields = ("id", "status")
+        model = Seat
+        fields = ("id", "seat_number", "row", "seat_class", "airplane")
+        read_only_fields = ("id",)

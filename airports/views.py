@@ -1,9 +1,20 @@
 
 from rest_framework import mixins, viewsets, status, generics
 
-from airports.models import Country, Airport, Airline, Airplane, Flight, Ticket
-from airports.serializer import CountrySerializer, AirportSerializer, AirlineSerializer, AirplaneSerializer, FlightSerializer, TicketSerializer
-
+from airports.models import Country, Airport, Airline, Airplane, Flight, Seat, SeatType, Ticket, City
+from airports.serializer import (
+    AirplaneListSerializer,
+    CitySerializer,
+    CountrySerializer,
+    AirportSerializer,
+    AirlineSerializer, 
+    AirplaneSerializer, 
+    FlightSerializer,
+    SeatSerializer, 
+    TicketSerializer, 
+    SeatTypeSerializer,
+    AirplaneRetrieveSerializer,
+)
 
 
 class CountryViewSet(
@@ -20,6 +31,7 @@ class AirportViewSet(
     serializer_class = AirportSerializer
 
 
+
 class AirlineViewSet(
     viewsets.ModelViewSet,
 ):
@@ -33,6 +45,19 @@ class AirplaneViewSet(
     queryset = Airplane.objects.all()
     serializer_class = AirplaneSerializer
 
+    def get_serializer_class(self):
+        if self.action == "list":
+            return AirplaneListSerializer
+        if self.action == "retrieve":
+            return AirplaneRetrieveSerializer
+        return AirplaneSerializer
+    
+    def get_queryset(self):
+        queryset = self.queryset
+        if self.action in ("list", "retrieve"):
+            return queryset.prefetch_related("seat_type")
+        return queryset
+
 
 class FlightViewSet(
     viewsets.ModelViewSet,
@@ -41,9 +66,24 @@ class FlightViewSet(
     serializer_class = FlightSerializer
 
 
-class TicketViewSet(
+
+
+class SeatTypeViewSet(
     viewsets.ModelViewSet,
 ):
-    queryset = Ticket.objects.all()
-    serializer_class = TicketSerializer
+    queryset = SeatType.objects.all()
+    serializer_class = SeatTypeSerializer
 
+
+class SeatViewSet(
+    viewsets.ModelViewSet,
+):
+    queryset = Seat.objects.all()
+    serializer_class = SeatSerializer
+
+
+class CityViewSet(
+    viewsets.ModelViewSet,
+):
+    queryset = City.objects.all()
+    serializer_class = CitySerializer
