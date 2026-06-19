@@ -164,6 +164,21 @@ class Seat(models.Model):
             )
         ]
 
+    @staticmethod
+    def validate_seat(seat: int, num_seats: int, error_to_raise: Exception = ValueError):
+        if not (1 <= seat <= num_seats):
+            raise error_to_raise(
+                {
+                    "seat": f"seat must be in range [1, {num_seats}], not {seat}"
+                }
+            )
+
+    def clean(self):
+        self.validate_seat(
+        self.seat_number,
+        self.airplane.seat_type.num_seats)
+
+
     def __str__(self):
         return f"Seat {self.seat_number} (row {self.row}) | {self.airplane}"
 # в order буде сидіння і order має зберігати ці дані
