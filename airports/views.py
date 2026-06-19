@@ -1,7 +1,7 @@
 
 from rest_framework import mixins, viewsets, status, generics
 
-from airports.models import Country, Airport, Airline, Airplane, Flight, Seat, SeatType, Ticket, City
+from airports.models import Country, Airport, Airline, Airplane, Flight, Seat, SeatType, City
 from airports.serializer import (
     AirplaneListSerializer,
     CitySerializer,
@@ -11,7 +11,7 @@ from airports.serializer import (
     AirplaneSerializer, 
     FlightSerializer,
     SeatSerializer, 
-    TicketSerializer, 
+ 
     SeatTypeSerializer,
     AirplaneRetrieveSerializer,
 )

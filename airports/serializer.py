@@ -1,6 +1,7 @@
 from rest_framework import serializers
-from airports.models import Seat, SeatType, Ticket, Country, Airport, Airline, Airplane, Flight, City
+from airports.models import Seat, SeatType, Country, Airport, Airline, Airplane, Flight, City
 import logging
+from django.db import transaction
 
 logger = logging.getLogger(__name__)
 
@@ -92,16 +93,19 @@ class AirplaneSerializer(serializers.ModelSerializer):
         source="airline",
         write_only=True,
     )
+    seat_type = SeatTypeSerializer(many=True, read_only=False, allow_empty=False)
 
     class Meta:
         model = Airplane
         fields = ("id", "model", "airline", "reg_number", "seat_type", "airline_name")
         read_only_fields = ("id",)
 
+    @transaction.atomic
     def create(self, validated_data):
         seat_types = validated_data.pop("seat_type")
         airplane = Airplane.objects.create(**validated_data)
-        airplane.seat_type.set(seat_types)
+        for seat_type in seat_types:
+            SeatType.objects.create(airplane=airplane, **seat_type)
         return airplane
 
 
