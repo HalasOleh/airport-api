@@ -6,7 +6,6 @@ from airports.views import (
     AirlineViewSet, 
     AirplaneViewSet, 
     FlightViewSet, 
-    TicketViewSet, 
     SeatTypeViewSet,
     SeatViewSet,
     CityViewSet,
@@ -24,7 +23,6 @@ router.register('airport', AirportViewSet)
 router.register('airline', AirlineViewSet)
 router.register('airplane', AirplaneViewSet)
 router.register('flight', FlightViewSet)
-router.register('ticket', TicketViewSet)
 router.register('seat-type', SeatTypeViewSet)
 router.register('seat', SeatViewSet)
 

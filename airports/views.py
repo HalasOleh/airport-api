@@ -1,7 +1,16 @@
 
 from rest_framework import mixins, viewsets, status, generics
 
-from airports.models import Country, Airport, Airline, Airplane, Flight, Seat, SeatType, Ticket, City
+from airports.models import (
+    Country,
+    Airport,
+    Airline,
+    Airplane,
+    Flight,
+    Seat,
+    SeatType,
+    City,
+)
 from airports.serializer import (
     AirplaneListSerializer,
     CitySerializer,
@@ -10,10 +19,10 @@ from airports.serializer import (
     AirlineSerializer, 
     AirplaneSerializer, 
     FlightSerializer,
-    SeatSerializer, 
-    TicketSerializer, 
+    SeatSerializer,
     SeatTypeSerializer,
     AirplaneRetrieveSerializer,
+    FlightRetrieveSerializer,
 )
 
 
@@ -29,7 +38,6 @@ class AirportViewSet(
 ):
     queryset = Airport.objects.all()
     serializer_class = AirportSerializer
-
 
 
 class AirlineViewSet(
@@ -54,6 +62,7 @@ class AirplaneViewSet(
     
     def get_queryset(self):
         queryset = self.queryset
+
         if self.action in ("list", "retrieve"):
             return queryset.prefetch_related("seat_type")
         return queryset
@@ -65,7 +74,10 @@ class FlightViewSet(
     queryset = Flight.objects.all()
     serializer_class = FlightSerializer
 
-
+    def get_serializer_class(self):
+        if self.action == "retrieve":
+            return FlightRetrieveSerializer
+        return FlightSerializer
 
 
 class SeatTypeViewSet(
@@ -87,3 +99,4 @@ class CityViewSet(
 ):
     queryset = City.objects.all()
     serializer_class = CitySerializer
+

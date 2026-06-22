@@ -1,7 +1,9 @@
 from rest_framework import serializers
-from airports.models import Seat, SeatType, Ticket, Country, Airport, Airline, Airplane, Flight, City
+from airports.models import Seat, SeatType, Country, Airport, Airline, Airplane, Flight, City
 import logging
-
+from django.db import transaction
+from tickets.models import Ticket
+from tickets.serializers import TicketSerializer
 logger = logging.getLogger(__name__)
 
 
@@ -86,22 +88,30 @@ class ShortSeatTypeSerializer(SeatTypeSerializer):
 
 
 class AirplaneSerializer(serializers.ModelSerializer):
-    airline = serializers.StringRelatedField(read_only=True)
-    airline_name = serializers.PrimaryKeyRelatedField(
+#    airline = serializers.StringRelatedField(read_only=True)
+#    airline_name = serializers.PrimaryKeyRelatedField(
+#        queryset=Airline.objects.all(),
+#        source="airline",
+#        write_only=True,
+#
+#    )
+    airline = serializers.SlugRelatedField(
+        slug_field="name",
         queryset=Airline.objects.all(),
-        source="airline",
-        write_only=True,
     )
+    seat_type = SeatTypeSerializer(many=True, read_only=False, allow_empty=False)
 
     class Meta:
         model = Airplane
-        fields = ("id", "model", "airline", "reg_number", "seat_type", "airline_name")
+        fields = ("id", "model", "airline", "reg_number", "seat_type")
         read_only_fields = ("id",)
 
+    @transaction.atomic
     def create(self, validated_data):
         seat_types = validated_data.pop("seat_type")
         airplane = Airplane.objects.create(**validated_data)
-        airplane.seat_type.set(seat_types)
+        for seat_type in seat_types:
+            SeatType.objects.create(airplane=airplane, **seat_type)
         return airplane
 
 
@@ -147,9 +157,35 @@ class FlightSerializer(serializers.ModelSerializer):
         return data
 
 
+class FlightRetrieveSerializer(FlightSerializer):
+    airplane = AirplaneRetrieveSerializer(read_only=True)
+    taken_seats = serializers.SlugRelatedField(
+        many=True,
+        read_only=True,
+        slug_field="seat_number",
+        source="tickets",
+    )
+
+    class Meta:
+        model = Flight
+        fields = (
+            "id",
+            "status",
+            "from_airport",
+            "to_airport",
+            "departure",
+            "arrival",
+            "airplane",
+            "taken_seats",
+        )
+        read_only_fields = ("id",)
+
+
 
 class SeatSerializer(serializers.ModelSerializer):
     class Meta:
         model = Seat
         fields = ("id", "seat_number", "row", "seat_class", "airplane")
         read_only_fields = ("id",)
+
+
