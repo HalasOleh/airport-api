@@ -24,6 +24,13 @@ from airports.serializer import (
     AirplaneRetrieveSerializer,
     FlightRetrieveSerializer,
 )
+from rest_framework.pagination import PageNumberPagination
+
+
+class FlightPagination(PageNumberPagination):
+    page_size = 5
+    page_size_query_param = "page_size"
+    max_page_size = 50
 
 
 class CountryViewSet(
@@ -73,7 +80,9 @@ class FlightViewSet(
 ):
     queryset = Flight.objects.all()
     serializer_class = FlightSerializer
+    pagination_class = FlightPagination
 
+    
     def get_serializer_class(self):
         if self.action == "retrieve":
             return FlightRetrieveSerializer
