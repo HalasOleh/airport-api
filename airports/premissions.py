@@ -11,4 +11,4 @@ class IsAdminAllORIsAuthenticatedReadOnly(BasePermission):
             request.method in SAFE_METHODS and request.user and request.user.is_authenticated
         ) or (
             request.user and request.user.is_staff
-        )
+        )#the request may not have a user if it is anonymous or none, because without this there is no one to ask and there will be an error
