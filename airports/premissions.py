@@ -9,6 +9,6 @@ class IsAdminAllORIsAuthenticatedReadOnly(BasePermission):
     def has_permission(self, request, view):
         return bool(
             request.method in SAFE_METHODS and request.user and request.user.is_authenticated
-        ) or (d
+        ) or (
             request.user and request.user.is_staff
-        )#запит може не мати користовача якщо анонімний або none, тому що без цього немає в кого питати і буде помилка
+        )
