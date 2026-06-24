@@ -14,7 +14,7 @@ class UserSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         """Create user with encrypted password."""
-        return get_user_model().objects.create_user(**validated_data)
+        return get_user_model().objects.create_user(**validated_data)#менеджер обєктів багато методв
 
     def update(self, instance, validated_data):
         """Update User with encrypted password."""

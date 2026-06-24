@@ -1,5 +1,6 @@
-
 from rest_framework import mixins, viewsets, status, generics
+from rest_framework.authentication import TokenAuthentication
+from rest_framework.permissions import IsAdminUser, IsAuthenticated
 
 from airports.models import (
     Country,
@@ -11,6 +12,7 @@ from airports.models import (
     SeatType,
     City,
 )
+from airports.premissions import IsAdminAllORIsAuthenticatedReadOnly
 from airports.serializer import (
     AirplaneListSerializer,
     CitySerializer,
@@ -59,6 +61,16 @@ class AirplaneViewSet(
 ):
     queryset = Airplane.objects.all()
     serializer_class = AirplaneSerializer
+    authentication_classes = (TokenAuthentication,)# here we check the user by token
+    permission_classes = (IsAdminAllORIsAuthenticatedReadOnly,)
+
+    # permission_classes = (IsAdminUser,)# if staff true we can do (list, retrieve, create, update, delete)
+    #
+    # def get_permissions(self):# DRF trigger this def before every requeste to filter premission for every user/staff
+    #     if self.action in ("list", "retrieve"):# self.action - action() - (list, retrieve..)
+    #         return (IsAuthenticated(),)
+    #     return super().get_permissions()# return what writen in permission_classes upper
+
 
     def get_serializer_class(self):
         if self.action == "list":
@@ -82,7 +94,7 @@ class FlightViewSet(
     serializer_class = FlightSerializer
     pagination_class = FlightPagination
 
-    
+
     def get_serializer_class(self):
         if self.action == "retrieve":
             return FlightRetrieveSerializer
