@@ -1,6 +1,6 @@
-from rest_framework import mixins, viewsets, status, generics
-from rest_framework.authentication import TokenAuthentication
-from rest_framework.permissions import IsAdminUser, IsAuthenticated
+from rest_framework import viewsets
+from rest_framework_simplejwt.authentication import JWTAuthentication
+
 
 from airports.models import (
     Country,
@@ -12,7 +12,7 @@ from airports.models import (
     SeatType,
     City,
 )
-from airports.premissions import IsAdminAllORIsAuthenticatedReadOnly
+from airports.permissions import IsAdminAllORIsAuthenticatedReadOnly
 from airports.serializer import (
     AirplaneListSerializer,
     CitySerializer,
@@ -40,6 +40,7 @@ class CountryViewSet(
 ):
     queryset = Country.objects.all()
     serializer_class = CountrySerializer
+    filterset_fields = ["name", "code"]
 
 
 class AirportViewSet(
@@ -47,6 +48,7 @@ class AirportViewSet(
 ):
     queryset = Airport.objects.all()
     serializer_class = AirportSerializer
+    filterset_fields = ["code", "city", "country"]
 
 
 class AirlineViewSet(
@@ -54,6 +56,7 @@ class AirlineViewSet(
 ):
     queryset = Airline.objects.all()
     serializer_class = AirlineSerializer
+    filterset_fields = ["name", "country", "airport"]
 
 
 class AirplaneViewSet(
@@ -61,8 +64,8 @@ class AirplaneViewSet(
 ):
     queryset = Airplane.objects.all()
     serializer_class = AirplaneSerializer
-    authentication_classes = (TokenAuthentication,)# here we check the user by token
     permission_classes = (IsAdminAllORIsAuthenticatedReadOnly,)
+    search_fields = ['model', 'reg_number', 'airline__name', 'seat_type__num_seats']
 
     # permission_classes = (IsAdminUser,)# if staff true we can do (list, retrieve, create, update, delete)
     #
@@ -71,6 +74,10 @@ class AirplaneViewSet(
     #         return (IsAuthenticated(),)
     #     return super().get_permissions()# return what writen in permission_classes upper
 
+    @staticmethod
+    def _params_to_ints(query_string):
+        """Converts a string of format '1,2,3' to a list of integers [1, 2, 3]"""
+        return [int(str_id) for str_id in query_string.split(",")]
 
     def get_serializer_class(self):
         if self.action == "list":
@@ -82,17 +89,29 @@ class AirplaneViewSet(
     def get_queryset(self):
         queryset = self.queryset
 
+        seat_type = self.request.query_params.get("seat_type")
+        seat_class = self.request.query_params.get("seat_class")
+        if seat_class:
+            seat_class_list = seat_class.split(",")
+            queryset = queryset.filter(seat_type__seat_class__in=seat_class_list)
+        if seat_type:
+            seat_type = self._params_to_ints(seat_type)
+            queryset = queryset.filter(seat_type__id__in=seat_type)
+
         if self.action in ("list", "retrieve"):
             return queryset.prefetch_related("seat_type")
+
         return queryset
 
 
 class FlightViewSet(
     viewsets.ModelViewSet,
 ):
+    
     queryset = Flight.objects.all()
     serializer_class = FlightSerializer
     pagination_class = FlightPagination
+    filterset_fields = ["status", "from_airport", "to_airport", "airplane"]
 
 
     def get_serializer_class(self):
@@ -106,6 +125,7 @@ class SeatTypeViewSet(
 ):
     queryset = SeatType.objects.all()
     serializer_class = SeatTypeSerializer
+    filterset_fields = ["seat_class", "airplane"]
 
 
 class SeatViewSet(
@@ -113,6 +133,7 @@ class SeatViewSet(
 ):
     queryset = Seat.objects.all()
     serializer_class = SeatSerializer
+    filterset_fields = ["seat_class", "airplane", "row"]
 
 
 class CityViewSet(
@@ -120,4 +141,6 @@ class CityViewSet(
 ):
     queryset = City.objects.all()
     serializer_class = CitySerializer
+    filterset_fields = ["name", "country"]
+
 

@@ -54,17 +54,19 @@ class OrderSerializer(serializers.ModelSerializer):
         fields = ("id", "created_at", "user", "tickets")
         read_only_fields = ("id", "created_at", "user")
 
+    @transaction.atomic()        # do all or nothing
     def create(self, validated_data):
-        with transaction.atomic():
-            tickets_data = validated_data.pop("tickets")
-            order = Order.objects.create(**validated_data)
-            for ticket_data in tickets_data:
-                Ticket.objects.create(
-                    order=order,
-                    user=order.user,
-                    **ticket_data
-                )
-            return order
+
+        tickets_data = validated_data.pop("tickets")
+        order = Order.objects.create(**validated_data)
+        
+        for ticket_data in tickets_data:
+            Ticket.objects.create(
+                order=order,
+                user=order.user,
+                **ticket_data
+            )
+        return order
 
 
 class OrderRetrieveSerializer(OrderSerializer):

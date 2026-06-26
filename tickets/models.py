@@ -4,6 +4,7 @@ from django.db.models import UniqueConstraint
 
 from airports.models import Flight, Seat
 
+
 class Ticket(models.Model):
     class Status(models.TextChoices):
         BOOKED = "BOOKED", "Booked"
@@ -16,7 +17,6 @@ class Ticket(models.Model):
         choices=Status.choices,
 
     )
-
 
     seat = models.ForeignKey(
         Seat,
@@ -43,7 +43,6 @@ class Ticket(models.Model):
         null=True, blank=True
     )
 
-
     class Meta:
         constraints = [
             UniqueConstraint(fields=["seat", "flight"], name="unique_ticket")
@@ -59,11 +58,16 @@ class Ticket(models.Model):
             return None
         return self.seat.seat_number
 
+
     def clean(self):
-        self.validate_seat(
-        self.seat,
-        self.airplane.seat_type.num_seats
-        )
+        """Validate that the seat belongs to the flight's airplane."""
+        if self.seat and self.flight and self.flight.airplane:
+            if self.seat.airplane != self.flight.airplane:
+                from django.core.exceptions import ValidationError
+                raise ValidationError(
+                    {"seat": "This seat does not belong to the flight's airplane."}
+                )
+
 
 class Order(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)

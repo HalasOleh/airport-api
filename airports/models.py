@@ -101,7 +101,7 @@ class Airline(models.Model):
         validators=[
             RegexValidator(
                 regex=r"^[A-Z][A-Za-z\s\-]+$",
-                message="Headquarters must start with a capital letter and coniain only letters, spaces or hyphens."
+                message="Headquarters must start with a capital letter and contain only letters, spaces or hyphens."
                 )
             ]        
         )
@@ -171,7 +171,7 @@ class Airplane(models.Model):
         validators=[
             RegexValidator(
                 regex=r"^[A-Z][A-Za-z0-9\s\-]+$",
-                message = "Airplane models must start with a capital letter and contain only letters, numbers, spaces or hypenus"
+                message = "Airplane models must start with a capital letter and contain only letters, numbers, spaces or hyphens"
                 )
             ]
         )

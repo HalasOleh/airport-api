@@ -2,8 +2,8 @@ from rest_framework import serializers
 from airports.models import Seat, SeatType, Country, Airport, Airline, Airplane, Flight, City
 import logging
 from django.db import transaction
-from tickets.models import Ticket
-from tickets.serializers import TicketSerializer
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -165,6 +165,7 @@ class FlightRetrieveSerializer(FlightSerializer):
         slug_field="seat_number",
         source="tickets",
     )
+    tickets_taken = serializers.IntegerField(read_only=True, source="tickets.count")
 
     class Meta:
         model = Flight
@@ -177,9 +178,9 @@ class FlightRetrieveSerializer(FlightSerializer):
             "arrival",
             "airplane",
             "taken_seats",
+            "tickets_taken",
         )
         read_only_fields = ("id",)
-
 
 
 class SeatSerializer(serializers.ModelSerializer):
@@ -187,5 +188,3 @@ class SeatSerializer(serializers.ModelSerializer):
         model = Seat
         fields = ("id", "seat_number", "row", "seat_class", "airplane")
         read_only_fields = ("id",)
-
-
