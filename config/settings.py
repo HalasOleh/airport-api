@@ -1,6 +1,7 @@
 from decouple import config
 from pathlib import Path
 import os
+from datetime import timedelta
 
 try:
     from dotenv import load_dotenv
@@ -36,6 +37,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'drf_spectacular',
     'tickets',
+    'django_filters',
 ]
 
 MIDDLEWARE = [
@@ -118,7 +120,30 @@ DATETIME_FORMAT = "d/m/Y"
 STATIC_URL = 'static/'
 
 REST_FRAMEWORK = {
+        "DEFAULT_FILTER_BACKENDS": [
+        'django_filters.rest_framework.DjangoFilterBackend',
+        'rest_framework.filters.SearchFilter',
+        'rest_framework.filters.OrderingFilter',
+        ],
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 10,
+    "DEFAULT_PERMISSION_CLASSES": [
+        "airports.permissions.IsAdminAllORIsAuthenticatedReadOnly",
+    ],
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+    ]
+}
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=30),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
+    "ROTATE_REFRESH_TOKENS": True,
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    "AUTH_TOKEN_CLASSES": ("rest_framework_simplejwt.tokens.AccessToken",),
+    "USER_ID_FIELD": "id",
+    "USER_ID_CLAIM": "user_id",
 }
 
 AUTH_USER_MODEL = "user.User"
@@ -141,3 +166,5 @@ LOGGING = {
         "level": "INFO",
     },
 }
+
+

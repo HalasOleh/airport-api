@@ -14,9 +14,10 @@ class FlightAdmin(admin.ModelAdmin):
 
 admin.site.register(Country)
 admin.site.register(Airport)
+
 admin.site.register(Airline)
 admin.site.register(Airplane)
 admin.site.register(Flight, FlightAdmin)
-admin.site.register(Ticket)
 admin.site.register(SeatType)
+
 admin.site.register(City)

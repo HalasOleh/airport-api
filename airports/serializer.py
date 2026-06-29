@@ -3,6 +3,7 @@ from airports.models import Seat, SeatType, Country, Airport, Airline, Airplane,
 import logging
 from django.db import transaction
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -87,17 +88,22 @@ class ShortSeatTypeSerializer(SeatTypeSerializer):
 
 
 class AirplaneSerializer(serializers.ModelSerializer):
-    airline = serializers.StringRelatedField(read_only=True)
-    airline_name = serializers.PrimaryKeyRelatedField(
+#    airline = serializers.StringRelatedField(read_only=True)
+#    airline_name = serializers.PrimaryKeyRelatedField(
+#        queryset=Airline.objects.all(),
+#        source="airline",
+#        write_only=True,
+#
+#    )
+    airline = serializers.SlugRelatedField(
+        slug_field="name",
         queryset=Airline.objects.all(),
-        source="airline",
-        write_only=True,
     )
     seat_type = SeatTypeSerializer(many=True, read_only=False, allow_empty=False)
 
     class Meta:
         model = Airplane
-        fields = ("id", "model", "airline", "reg_number", "seat_type", "airline_name")
+        fields = ("id", "model", "airline", "reg_number", "seat_type")
         read_only_fields = ("id",)
 
     @transaction.atomic
@@ -150,6 +156,31 @@ class FlightSerializer(serializers.ModelSerializer):
 
         return data
 
+
+class FlightRetrieveSerializer(FlightSerializer):
+    airplane = AirplaneRetrieveSerializer(read_only=True)
+    taken_seats = serializers.SlugRelatedField(
+        many=True,
+        read_only=True,
+        slug_field="seat_number",
+        source="tickets",
+    )
+    tickets_taken = serializers.IntegerField(read_only=True, source="tickets.count")
+
+    class Meta:
+        model = Flight
+        fields = (
+            "id",
+            "status",
+            "from_airport",
+            "to_airport",
+            "departure",
+            "arrival",
+            "airplane",
+            "taken_seats",
+            "tickets_taken",
+        )
+        read_only_fields = ("id",)
 
 
 class SeatSerializer(serializers.ModelSerializer):

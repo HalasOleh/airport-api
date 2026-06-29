@@ -1,5 +1,4 @@
 from django.urls import path, include
-from airports.serializer import SeatSerializer
 from airports.views import (
     CountryViewSet,
     AirportViewSet, 
