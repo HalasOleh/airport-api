@@ -150,6 +150,12 @@ class SeatType(models.Model):
         if is_new:
             self.create_seats()
 
+    def save(self, *args, **kwargs):
+        is_new = self.pk is None
+        super().save(*args, **kwargs)
+        if is_new:
+            self.create_seats()
+
     def create_seats(self):
         start_number = self.airplane.seats.count() + 1
         for i in range(start_number, start_number + self.num_seats):
