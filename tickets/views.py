@@ -6,6 +6,7 @@ from django.conf import settings
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status as http_status
+from rest_framework.throttling import UserRateThrottle, AnonRateThrottle
 
 from .models import Payment
 
@@ -54,7 +55,12 @@ class SuccessView(viewsets.ModelViewSet):
     queryset = Payment.objects.all()
     serializer_class = OrderRetrieveSerializer
 
+class CheckoutRateThrottle(UserRateThrottle):
+    scope = "checkout"
+
+
 class CreateCheckoutSessionView(APIView):
+    throttle_classes = [CheckoutRateThrottle, AnonRateThrottle]
 
     def post(self, request, order_id):
         order = Order.objects.filter(id=order_id, user=request.user).first()
@@ -104,6 +110,7 @@ class StripeWebhookView(APIView):
 
     authentication_classes = []
     permission_classes = []
+    throttle_classes = []
 
     def post(self, request):
 
