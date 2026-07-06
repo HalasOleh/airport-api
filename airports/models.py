@@ -287,5 +287,3 @@ class Flight(models.Model):
 
     def __str__(self):
         return f"{self.from_airport} - {self.to_airport}: {self.status}"
-
-

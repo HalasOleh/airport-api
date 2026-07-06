@@ -16,13 +16,10 @@ class TicketSerializer(serializers.ModelSerializer):
     flight = serializers.PrimaryKeyRelatedField(
         queryset=Flight.objects.all()
     )
-    user = serializers.PrimaryKeyRelatedField(
-        queryset=get_user_model().objects.all()
-    )
 
     class Meta:
         model = Ticket
-        fields = ("id", "status", "seat", "flight", "user",)
+        fields = ("id", "status", "seat", "flight", "price")
         read_only_fields = ("id", "created_at")
         validators = [
             UniqueTogetherValidator(
@@ -33,7 +30,6 @@ class TicketSerializer(serializers.ModelSerializer):
 class TicketListSerializer(TicketSerializer):
     seat = serializers.StringRelatedField()
     flight = serializers.StringRelatedField()
-    user = serializers.StringRelatedField()
 
 
 class OrderTicketSerializer(serializers.ModelSerializer):
@@ -42,7 +38,7 @@ class OrderTicketSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Ticket
-        fields = ("seat", "flight", "status")
+        fields = ("seat", "flight", "status", "price")
 
 
 class OrderSerializer(serializers.ModelSerializer):
@@ -51,8 +47,8 @@ class OrderSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Order
-        fields = ("id", "created_at", "user", "tickets")
-        read_only_fields = ("id", "created_at", "user")
+        fields = ("id", "created_at", "user", "tickets", "status")
+        read_only_fields = ("id", "created_at", "user", "status")
 
     @transaction.atomic()        # do all or nothing
     def create(self, validated_data):
