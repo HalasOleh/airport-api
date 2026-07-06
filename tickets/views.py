@@ -98,7 +98,7 @@ class CreateCheckoutSessionView(APIView):
             order=order,
             stripe_session_id=session.id,
             stripe_payment_intent=session.payment_intent or "",
-            amount=order.price / 100,  # DecimalField — конвертуємо в долари для зберігання
+            amount=order.price / 100,
             currency="usd",
             status=Payment.Status.PENDING,
         )
