@@ -15,10 +15,4 @@ class Migration(migrations.Migration):
             model_name='airplane',
             name='seat_type',
         ),
-        migrations.AddField(
-            model_name='seattype',
-            name='airplane',
-            field=models.ForeignKey(default=1, on_delete=django.db.models.deletion.CASCADE, related_name='seat_types', to='airports.airplane'),
-            preserve_default=False,
-        ),
     ]
