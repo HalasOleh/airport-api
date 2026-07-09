@@ -5,5 +5,6 @@ drf-spectacular
 django-filter
 python-decouple
 python-dotenv
+requests
 stripe
 psycopg2-binary
