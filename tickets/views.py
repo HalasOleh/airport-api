@@ -3,6 +3,7 @@ from tickets.models import Ticket, Order
 from tickets.serializers import TicketSerializer, OrderSerializer, TicketListSerializer, OrderRetrieveSerializer
 import stripe
 from django.conf import settings
+from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status as http_status
@@ -66,6 +67,12 @@ class CreateCheckoutSessionView(APIView):
         order = Order.objects.filter(id=order_id, user=request.user).first()
         if order is None:
             return Response({"detail": "Order not found."}, status=http_status.HTTP_404_NOT_FOUND)
+
+        if order.expire():
+            return Response({"detail": "Booking expired. Order was cancelled."}, status=http_status.HTTP_400_BAD_REQUEST)
+
+        if order.status != Order.Status.PENDING:
+            return Response({"detail": "Order is no longer pending."}, status=http_status.HTTP_400_BAD_REQUEST)
 
         tickets = order.tickets.all()
         if not tickets:

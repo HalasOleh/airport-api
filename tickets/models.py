@@ -1,7 +1,11 @@
+from datetime import timedelta
+
 from django.conf import settings
 from django.db import models
 from django.db.models import UniqueConstraint
 from django.db.models import Sum
+from django.utils import timezone
+
 from airports.models import Flight, Seat
 
 
@@ -77,6 +81,8 @@ class Order(models.Model):
         CANCELLED = "CANCELLED", "Cancelled"
         
     created_at = models.DateTimeField(auto_now_add=True)
+    booked_until = models.DateTimeField(null=True, blank=True)
+
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     status = models.CharField(
         max_length=10,
@@ -90,6 +96,22 @@ class Order(models.Model):
     @property
     def price(self):
         return self.tickets.aggregate(total=Sum("price"))["total"] or 0
+
+    def set_booked_until(self, minutes: int = 10):
+        self.booked_until = timezone.now() + timedelta(minutes=minutes)
+        return self.booked_until
+
+    def expire(self):
+        if self.status != self.Status.PENDING:
+            return False
+
+        if self.booked_until and timezone.now() > self.booked_until:
+            self.status = self.Status.CANCELLED
+            self.save(update_fields=["status"])
+            self.tickets.update(status=Ticket.Status.CANCELLED)
+            return True
+
+        return False
 
     def __str__(self):
         return str(self.created_at)

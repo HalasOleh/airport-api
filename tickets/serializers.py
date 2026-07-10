@@ -55,7 +55,9 @@ class OrderSerializer(serializers.ModelSerializer):
 
         tickets_data = validated_data.pop("tickets")
         order = Order.objects.create(**validated_data)
-        
+        order.set_booked_until()
+        order.save()
+
         for ticket_data in tickets_data:
             Ticket.objects.create(
                 order=order,
