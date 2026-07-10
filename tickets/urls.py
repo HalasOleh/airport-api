@@ -19,7 +19,7 @@ router.register('payments/success', SuccessView, basename='payments-success')
 urlpatterns = [
     path('', include(router.urls)),
     path("order/<int:order_id>/checkout/", CreateCheckoutSessionView.as_view(), name="create-checkout-session"),
-    path("payments/success/", StripeWebhookView.as_view(), name="stripe-webhook"),
+    path("payments/webhook/", StripeWebhookView.as_view(), name="stripe-webhook"),
     ]
 #evenly-jolly-feat-free
 #acct_1Tnkk0PZ1F8IHooI
