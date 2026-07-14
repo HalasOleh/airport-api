@@ -2,7 +2,7 @@ from django.db import transaction
 from django.contrib.auth import get_user_model
 from rest_framework.validators import UniqueTogetherValidator
 
-from tickets.models import Ticket, Order
+from tickets.models import Payment, Ticket, Order
 from airports.models import Seat, Flight
 from rest_framework import serializers
 
@@ -20,7 +20,7 @@ class TicketSerializer(serializers.ModelSerializer):
     class Meta:
         model = Ticket
         fields = ("id", "status", "seat", "flight", "price")
-        read_only_fields = ("id", "created_at")
+        read_only_fields = ("id",)
         validators = [
             UniqueTogetherValidator(
                 queryset=Ticket.objects.all(),
@@ -69,3 +69,12 @@ class OrderSerializer(serializers.ModelSerializer):
 
 class OrderRetrieveSerializer(OrderSerializer):
     tickets = TicketListSerializer(many=True)# many=True
+
+
+class PaymentRetrieveSerializer(serializers.ModelSerializer):
+    order = OrderRetrieveSerializer(read_only=True)
+
+    class Meta:
+        model = Payment
+        fields = ("id", "order", "stripe_session_id", "stripe_payment_intent", "amount", "currency", "status", "created_at")
+        read_only_fields = ("id", "order", "stripe_session_id", "stripe_payment_intent", "amount", "currency", "status", "created_at")

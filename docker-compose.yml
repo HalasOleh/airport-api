@@ -1,10 +1,12 @@
 services:
   db:
     image: postgres:18
+    env_file:
+      - .env
     environment:
-      POSTGRES_DB: airport_db
-      POSTGRES_USER: stepan
-      POSTGRES_PASSWORD: admin
+    - POSTGRES_DB=${DB_NAME}
+    - POSTGRES_USER=${DB_USER}
+    - POSTGRES_PASSWORD=${DB_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql
     ports:
@@ -22,11 +24,11 @@ services:
     env_file:
       - .env
     environment:
-      DB_HOST: db
-      DB_NAME: airport_db
-      DB_USER: stepan
-      DB_PASSWORD: admin
-      DB_PORT: 5432
+      - DB_HOST=${DB_HOST}
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_PORT=${DB_PORT}
     depends_on:
       - db
 

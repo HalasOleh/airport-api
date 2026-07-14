@@ -128,7 +128,7 @@ class Payment(models.Model):
     stripe_session_id = models.CharField(max_length=255)  # with Stripe Checkout
     stripe_payment_intent = models.CharField(max_length=255)  # for webhook
     amount = models.DecimalField(max_digits=10, decimal_places=2)
-    currency= models.CharField(max_length=3, default="usd")
+    currency = models.CharField(max_length=3, default="usd")
     status = models.CharField(
         max_length=9,
         default=Status.PENDING,
