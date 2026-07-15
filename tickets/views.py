@@ -118,7 +118,7 @@ class CreateCheckoutSessionView(APIView):
             metadata={"order_id": order.id},# stripe will send this data to webhook we can sand different data
         )
 
-        Payment.objects.create(
+        Payment.objects.create(#1
             order=order,
             stripe_session_id=session.id,
             stripe_payment_intent=session.payment_intent or "",
@@ -127,7 +127,7 @@ class CreateCheckoutSessionView(APIView):
             status=Payment.Status.PENDING,
         )
 
-        return Response({"checkout_url": session.url}, status=http_status.HTTP_201_CREATED)
+        return Response({"checkout_url": session.url}, status=http_status.HTTP_201_CREATED)#2
 
 #@method_decorator(csrf_exempt, name='dispatch')
 class StripeWebhookView(APIView):
@@ -154,8 +154,8 @@ class StripeWebhookView(APIView):
         if event["type"] == "checkout.session.completed":
             session = event["data"]["object"]
 
-            session
-            payment = Payment.objects.filter(stripe_session_id=session["id"]).first()
+            print(session)
+            payment = Payment.objects.filter(stripe_session_id=session["id"]).first()#3
             print(payment)
             if payment:
                 logger.info(f"Payment found (ID: {payment.id}), updating...")
@@ -171,4 +171,4 @@ class StripeWebhookView(APIView):
                 logger.error(f"Payment not found for session: {session['id']}")
                 return Response(status=http_status.HTTP_404_NOT_FOUND)
 
-        return Response(status=http_status.HTTP_200_OK) # TODO: handle other event types if needed
+        return Response(status=http_status.HTTP_200_OK) # TODO: handle other event types if needed№#
