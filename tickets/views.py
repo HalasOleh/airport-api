@@ -8,15 +8,19 @@ from tickets.serializers import(
     TicketListSerializer,
     OrderRetrieveSerializer,
     PaymentRetrieveSerializer,
+    OrderIDSerializer,
 )
 import stripe
-from django.conf import settings
+from config import settings
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status as http_status
 from rest_framework.throttling import UserRateThrottle, AnonRateThrottle
 from rest_framework.response import Response
 from rest_framework.generics import get_object_or_404
+from django.db import transaction
+
+from tickets.services.smtp import send_payment_confirmation_email
 from .models import Payment
 
 import logging
@@ -80,7 +84,13 @@ class CheckoutRateThrottle(UserRateThrottle):
 class CreateCheckoutSessionView(APIView):
     throttle_classes = [CheckoutRateThrottle, AnonRateThrottle]
 
-    def post(self, request, order_id):
+    
+    def post(self, request):
+        
+        serializer = OrderIDSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        order_id = serializer.validated_data["order_id"]
+        
         order = Order.objects.filter(id=order_id, user=request.user).first()
         if order is None:
             return Response({"detail": "Order not found."}, status=http_status.HTTP_404_NOT_FOUND)
@@ -109,12 +119,13 @@ class CreateCheckoutSessionView(APIView):
             for ticket in tickets
         ]
 
+        logger.info(f"Creating Stripe Checkout session for order {order.id}"),
         session = stripe.checkout.Session.create(
             payment_method_types=["card"], # Stripe chose by himself what show but here we can add more payment methods like ["card", "paypal"]
             line_items=line_items, # user itmes data
             mode="payment",# or "subscription" or "setup"
-            success_url="http://localhost:8000/tickets/payments/success/?session_id={CHECKOUT_SESSION_ID}",
-            cancel_url="http://localhost:8000/tickets/payments/cancel/",# change url to your frontend cancel page
+            success_url=f"{settings.BASE_URL}/tickets/payments/success/?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{settings.BASE_URL}/tickets/payments/cancel/",# change url to your frontend cancel page
             metadata={"order_id": order.id},# stripe will send this data to webhook we can sand different data
         )
 
@@ -122,14 +133,16 @@ class CreateCheckoutSessionView(APIView):
             order=order,
             stripe_session_id=session.id,
             stripe_payment_intent=session.payment_intent or "",
+
             amount=Decimal(order.price) / Decimal(100),  # DecimalField — convert in dollars from cents, Decima is used to avoid floating-point precision issues
+
             currency="usd",
             status=Payment.Status.PENDING,
         )
 
         return Response({"checkout_url": session.url}, status=http_status.HTTP_201_CREATED)#2
 
-#@method_decorator(csrf_exempt, name='dispatch')
+
 class StripeWebhookView(APIView):
 
     authentication_classes = []
@@ -139,8 +152,7 @@ class StripeWebhookView(APIView):
     def post(self, request):
         
         payload = request.body # .body - raw request bytes
-        sig_header = request.META.get("HTTP_STRIPE_SIGNATURE") # cryptographic signature sent by Stripe in the request headers
-        # print(payload)
+        sig_header = request.META.get("HTTP_STRIPE_SIGNATURE") # cryptographic signature sent by Stripe in the request headers 
         logger.info(f"Webhook received. Signature present: {bool(sig_header)}")
 
         try:
@@ -151,24 +163,28 @@ class StripeWebhookView(APIView):
 
         logger.info(f"Event type: {event['type']}")
 
-        if event["type"] == "checkout.session.completed":
-            session = event["data"]["object"]
+        if event["type"] == "checkout.session.completed":    
+            handle_checkout_session(self, event, payment_status=Payment.Status.SUCCEEDED, order_status=Order.Status.COMPLETED)
 
-            print(session)
-            payment = Payment.objects.filter(stripe_session_id=session["id"]).first()#3
-            print(payment)
-            if payment:
-                logger.info(f"Payment found (ID: {payment.id}), updating...")
-                payment.status = Payment.Status.SUCCEEDED
-                payment.stripe_payment_intent = session.get("payment_intent", "")
-                payment.save()
-                # if the payment is successful, but our program is crushed here, then the user has paid for the order, but the order status will not change to COMPLETED
-                payment.order.status = Order.Status.COMPLETED
-                payment.order.save()
-                logger.info(f"Order {payment.order.id} updated to COMPLETED")
-                return Response(status=http_status.HTTP_200_OK)
-            else:
-                logger.error(f"Payment not found for session: {session['id']}")
-                return Response(status=http_status.HTTP_404_NOT_FOUND)
-
+        elif event["type"] == "checkout.session.expired":
+            handle_checkout_session(self, event, payment_status=Payment.Status.FAILED, order_status=Order.Status.CANCELLED)
+        else:
+            logger.warning(f"Unhandled event type: {event['type']}")
+            return Response({"detail": "Payment not found."}, status=http_status.HTTP_404_NOT_FOUND)
         return Response(status=http_status.HTTP_200_OK) # TODO: handle other event types if needed№#
+
+def handle_checkout_session(event, payment_status, order_status):
+            session = event["data"]["object"]
+            payment = Payment.objects.filter(stripe_session_id=session["id"]).first()
+            
+            if not payment:
+                logger.error(f"Payment not found for expired session: {session['id']}")
+                return Response({"detail": "Payment not found."}, status=http_status.HTTP_404_NOT_FOUND)
+            
+            with transaction.atomic():
+                payment.status = payment_status
+                payment.save()
+
+                payment.order.status = order_status
+                payment.order.save()
+                logger.info(f"Order {payment.order.id } updated to {order_status}")

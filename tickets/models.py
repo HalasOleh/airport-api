@@ -2,7 +2,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.db import models
-from django.db.models import UniqueConstraint
+from django.db.models import Q, UniqueConstraint
 from django.db.models import Sum
 from django.utils import timezone
 
@@ -50,10 +50,14 @@ class Ticket(models.Model):
     price = models.PositiveIntegerField(help_text="Price in cents (e.g. 2000 = $20.00)")
     
     class Meta:
-        constraints = [
-            UniqueConstraint(fields=["seat", "flight"], name="unique_ticket")
-        ]
-        ordering = ("seat",)
+            constraints = [
+                UniqueConstraint(
+                    fields=["seat", "flight"],
+                    condition=Q(status__in=["BOOKED", "USED"]),
+                    name="unique_active_ticket",
+                )
+            ]
+            ordering = ("seat",)
 
     def __str__(self):
         return f"Ticket #{self.id}| {self.flight} | {self.status}"
@@ -79,16 +83,17 @@ class Order(models.Model):
         PENDING = "PENDING", "Pending"
         COMPLETED = "COMPLETED", "Completed"
         CANCELLED = "CANCELLED", "Cancelled"
-        
-    created_at = models.DateTimeField(auto_now_add=True)
-    booked_until = models.DateTimeField(null=True, blank=True)
-
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     status = models.CharField(
         max_length=10,
         default=Status.PENDING,
         choices=Status.choices,
     )
+        
+    created_at = models.DateTimeField(auto_now_add=True)
+    booked_until = models.DateTimeField(null=True, blank=True)
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+
     class Meta:
         ordering = ['-created_at']
 
@@ -122,16 +127,17 @@ class Payment(models.Model):
         PENDING = "PENDING", "Pending"
         SUCCEEDED = "SUCCEEDED", "Succeeded"
         FAILED = "FAILED", "Failed"
-
+        
+    status = models.CharField(
+        max_length=9,
+        default=Status.PENDING,
+        choices=Status.choices,
+    )
 
     order = models.ForeignKey(Order, related_name='payments', on_delete=models.CASCADE)
     stripe_session_id = models.CharField(max_length=255)  # with Stripe Checkout
     stripe_payment_intent = models.CharField(max_length=255)  # for webhook
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     currency = models.CharField(max_length=3, default="usd")
-    status = models.CharField(
-        max_length=9,
-        default=Status.PENDING,
-        choices=Status.choices,
-    )  # pending / succeeded / failed
+
     created_at = models.DateTimeField(auto_now_add=True)

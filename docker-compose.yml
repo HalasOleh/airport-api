@@ -24,11 +24,7 @@ services:
     env_file:
       - .env
     environment:
-      - DB_HOST=${DB_HOST}
-      - DB_NAME=${DB_NAME}
-      - DB_USER=${DB_USER}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - DB_PORT=${DB_PORT}
+      - DB_HOST=${DB_HOST} # override: in Docker-network, the service name (db) is used as the hostname for the database connection
     depends_on:
       - db
 

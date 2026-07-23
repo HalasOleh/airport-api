@@ -20,11 +20,14 @@ class TicketSerializer(serializers.ModelSerializer):
     class Meta:
         model = Ticket
         fields = ("id", "status", "seat", "flight", "price")
-        read_only_fields = ("id",)
+        read_only_fields = ("id", "status")
         validators = [
             UniqueTogetherValidator(
-                queryset=Ticket.objects.all(),
-                fields=["seat", "flight"])
+                queryset=Ticket.objects.filter(
+                    status__in=[Ticket.Status.BOOKED, Ticket.Status.USED],
+                ),
+                fields=["seat", "flight"]
+                )
         ]
 
 class TicketListSerializer(TicketSerializer):
@@ -38,8 +41,16 @@ class OrderTicketSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Ticket
-        fields = ("seat", "flight", "status", "price")
-
+        fields = ("id", "status", "seat", "flight", "price")
+        read_only_fields = ("id", "status")
+        validators = [
+            UniqueTogetherValidator(
+                queryset=Ticket.objects.filter(
+                    status__in=[Ticket.Status.BOOKED, Ticket.Status.USED],
+                ),
+                fields=["seat", "flight"]
+                )
+        ]
 
 class OrderSerializer(serializers.ModelSerializer):
     tickets = OrderTicketSerializer(many=True, read_only=False, allow_empty=False)
@@ -57,7 +68,7 @@ class OrderSerializer(serializers.ModelSerializer):
         order = Order.objects.create(**validated_data)
         order.set_booked_until()
         order.save()
-
+#
         for ticket_data in tickets_data:
             Ticket.objects.create(
                 order=order,
@@ -78,3 +89,7 @@ class PaymentRetrieveSerializer(serializers.ModelSerializer):
         model = Payment
         fields = ("id", "order", "stripe_session_id", "stripe_payment_intent", "amount", "currency", "status", "created_at")
         read_only_fields = ("id", "order", "stripe_session_id", "stripe_payment_intent", "amount", "currency", "status", "created_at")
+
+class OrderIDSerializer(serializers.Serializer):
+    order_id = serializers.IntegerField(write_only=True)
+    
