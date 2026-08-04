@@ -25,13 +25,6 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.DeleteModel(
-            name="Ticket",
-        ),
-        migrations.RemoveField(
-            model_name="airplane",
-            name="seat_type",
-        ),
         migrations.AddField(
             model_name="seattype",
             name="airplane",
