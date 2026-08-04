@@ -8,3 +8,10 @@ python-dotenv
 requests
 stripe
 psycopg2-binary
+openai
+chromadb
+mcp==1.29.0
+channels
+channels-redis
+daphne
+google-genai

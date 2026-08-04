@@ -1,4 +1,5 @@
 from django.urls import path, include
+from django.views.generic import TemplateView
 from airports.views import (
     CountryViewSet,
     AirportViewSet, 
@@ -26,6 +27,11 @@ router.register('seat-type', SeatTypeViewSet)
 router.register('seat', SeatViewSet)
 
 urlpatterns = [
+    path(
+        'ws-page/',
+        TemplateView.as_view(template_name='airports/ws_test.html'),
+        name='ws-test-page',
+    ),
     path('', include(router.urls)),
 
 ]
