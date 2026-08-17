@@ -27,11 +27,5 @@ router.register('seat-type', SeatTypeViewSet)
 router.register('seat', SeatViewSet)
 
 urlpatterns = [
-    path(
-        'ws-page/',
-        TemplateView.as_view(template_name='airports/ws_test.html'),
-        name='ws-test-page',
-    ),
     path('', include(router.urls)),
-
 ]
