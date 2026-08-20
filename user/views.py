@@ -12,6 +12,7 @@ class CreateUserView(generics.CreateAPIView):
 
 
 class LoginUserView(TokenObtainPairView):
+    
     permission_classes = ()
 
 

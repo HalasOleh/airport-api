@@ -150,12 +150,6 @@ class SeatType(models.Model):
         if is_new:
             self.create_seats()
 
-    def save(self, *args, **kwargs):
-        is_new = self.pk is None
-        super().save(*args, **kwargs)
-        if is_new:
-            self.create_seats()
-
     def create_seats(self):
         start_number = self.airplane.seats.count() + 1
         for i in range(start_number, start_number + self.num_seats):
@@ -237,9 +231,14 @@ class Seat(models.Model):
             )
 
     def clean(self):
+        num_seats = sum(
+            seat_type.num_seats
+            for seat_type in self.airplane.seat_type.all()
+        )
+
         self.validate_seat(
-        self.seat_number,
-        self.airplane.seat_type.num_seats
+            self.seat_number,
+            num_seats,
         )
 
 
