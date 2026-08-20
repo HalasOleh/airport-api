@@ -8,3 +8,12 @@ python-dotenv
 requests
 stripe
 psycopg2-binary
+openai
+pgvector
+sentence-transformers
+mcp==1.29.0
+channels
+channels-redis
+redis<6
+daphne
+google-genai

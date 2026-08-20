@@ -1,6 +1,8 @@
 services:
   db:
-    image: postgres:18
+    # Same PostgreSQL 17 as before, plus the pgvector extension. The existing
+    # data volume stays compatible; only the extension is added.
+    image: pgvector/pgvector:pg17
     env_file:
       - .env
     environment:
@@ -8,15 +10,34 @@ services:
     - POSTGRES_USER=${DB_USER}
     - POSTGRES_PASSWORD=${DB_PASSWORD}
     volumes:
-      - postgres_data:/var/lib/postgresql
+      - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
 
   web:
     build:
       context: .
       dockerfile: config/Dockerfile
-    command: sh -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
+    # reindex_kb is intentionally not chained with && - a failed embedding
+    # run must not stop the web server from starting. It logs and moves on.
+    command: sh -c "python manage.py migrate && { python manage.py reindex_kb || echo 'reindex_kb failed, serving the existing index'; } && daphne -b 0.0.0.0 -p 8000 config.asgi:application"
     volumes:
       - .:/app
     ports:
@@ -24,9 +45,14 @@ services:
     env_file:
       - .env
     environment:
-      - DB_HOST=${DB_HOST} # override: in Docker-network, the service name (db) is used as the hostname for the database connection
+      - DB_HOST=db
+      - DB_PORT=5432
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   postgres_data:
+  redis_data:
