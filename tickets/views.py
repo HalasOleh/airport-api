@@ -133,9 +133,7 @@ class CreateCheckoutSessionView(APIView):
             order=order,
             stripe_session_id=session.id,
             stripe_payment_intent=session.payment_intent or "",
-
             amount=Decimal(order.price) / Decimal(100),  # DecimalField — convert in dollars from cents, Decima is used to avoid floating-point precision issues
-
             currency="usd",
             status=Payment.Status.PENDING,
         )
