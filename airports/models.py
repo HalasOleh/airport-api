@@ -1,6 +1,8 @@
+from decimal import Decimal, ROUND_HALF_UP
+
 from django.conf import settings
 from django.db import models
-from django.core.validators import RegexValidator, MinValueValidator
+from django.core.validators import RegexValidator, MinValueValidator, MaxValueValidator
 
 class Country(models.Model):
     name = models.CharField(
@@ -87,13 +89,17 @@ class Airline(models.Model):
     founded_year = models.IntegerField(
         null=True,
         blank=True,
+        # A RegexValidator used to sit here. It matched on str(value), so it did
+        # reject 233 - but it raises with code="invalid", and IntegerField has
+        # its own "invalid" entry in error_messages. Field.run_validators()
+        # replaces the validator's message with the field's whenever the codes
+        # collide, so the user was told "value must be an integer" about a
+        # perfectly good integer. Range checks belong on a numeric field anyway.
         validators=[
-            RegexValidator(
-                regex=r"^(19|20)\d{2}$",
-                message="Founded year must be a four-digit year starting with 19 or 20."
-                )
-            ]
-        )
+            MinValueValidator(1900, message="Founded year must be 1900 or later."),
+            MaxValueValidator(2099, message="Founded year must be 2099 or earlier."),
+        ],
+    )
     headquarters = models.CharField(
         max_length=128,
         null=True,
@@ -283,6 +289,33 @@ class Flight(models.Model):
         null=True,
         blank=True,
     )
+
+    # The fare belongs to the flight, not to the airplane: the same aircraft
+    # flies different routes at different prices, so a price on SeatType or
+    # Airplane could never vary by destination. Stored in cents because that
+    # is what Stripe bills in - no float ever touches the money.
+    base_price = models.PositiveIntegerField(
+        default=0,
+        help_text="Economy fare in cents. Other classes are derived from it.",
+    )
+
+    # One number plus a multiplier keeps the pricing rule in a single place.
+    # A separate Fare table (flight x seat class) would allow classes to be
+    # priced independently; this is the upgrade path when that is needed.
+    CLASS_MULTIPLIER = {
+        SeatClass.ECONOMY: Decimal("1"),
+        SeatClass.BUSINESS: Decimal("2.5"),
+        SeatClass.FIRST: Decimal("4"),
+    }
+
+    def price_for(self, seat_class: str) -> int:
+        """Fare for one seat of the given class, in cents."""
+        multiplier = self.CLASS_MULTIPLIER.get(seat_class, Decimal("1"))
+        return int(
+            (Decimal(self.base_price) * multiplier)
+            .quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+        )
+
 
     def __str__(self):
         return f"{self.from_airport} - {self.to_airport}: {self.status}"

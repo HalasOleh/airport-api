@@ -1,7 +1,8 @@
 from datetime import timedelta
 
 from django.conf import settings
-from django.db import models
+from django.core.exceptions import ValidationError
+from django.db import models, transaction
 from django.db.models import Q, UniqueConstraint
 from django.db.models import Sum
 from django.utils import timezone
@@ -69,13 +70,83 @@ class Ticket(models.Model):
         return self.seat.seat_number
 
     def clean(self):
-        """Validate that the seat belongs to the flight's airplane."""
-        if self.seat and self.flight and self.flight.airplane:
-            if self.seat.airplane != self.flight.airplane:
-                from django.core.exceptions import ValidationError
+        """Rules the database cannot express, because they span two tables."""
+        if self.flight_id and not self.flight.base_price:
+            # default=0 on a new column would otherwise mean every existing
+            # flight silently sells free tickets. Refuse instead of guessing.
+            raise ValidationError(
+                {"flight": "This flight has no fare set (base_price is 0)."}
+            )
+
+        if self.seat_id and self.flight_id:
+            if self.flight.airplane_id is None:
+                raise ValidationError(
+                    {"flight": "This flight has no airplane assigned, so it has no seats to sell."}
+                )
+            if self.seat.airplane_id != self.flight.airplane_id:
                 raise ValidationError(
                     {"seat": "This seat does not belong to the flight's airplane."}
                 )
+
+        if self._state.adding and self.flight_id and self.flight.airplane_id:
+            # The unique constraint stops the same seat being sold twice, but
+            # it cannot count: seat is nullable, and NULL never collides with
+            # NULL in a unique index, so seatless tickets were unlimited.
+            # Capacity is the invariant that actually matters.
+            #
+            
+            # transaction commits (see save() below). A second request for the
+            # same flight blocks right here instead of reading a stale count -
+            # by the time it gets the lock, the first ticket is already
+            # counted. Without this, two concurrent requests can both read
+            # "1 of 1 taken" as false and both insert.
+            flight = Flight.objects.select_for_update().get(pk=self.flight_id) # select_for_update() locks the Flight row until the enclosing
+            capacity = flight.airplane.seats.count()
+            sold = Ticket.objects.filter(
+                flight_id=self.flight_id,
+                status__in=(Ticket.Status.BOOKED, Ticket.Status.USED),
+            ).count()
+            if sold >= capacity:
+                raise ValidationError(
+                    {
+                        "flight": (
+                            f"This flight is fully booked: {sold} of {capacity} "
+                            "seats are already taken."
+                        )
+                    }
+                )
+
+    def _seat_class(self) -> str:
+        from airports.models import SeatClass
+
+        return self.seat.seat_class if self.seat_id else SeatClass.ECONOMY
+
+    def save(self, *args, **kwargs):
+        """Derive the price and enforce the rules on every write path.
+
+        Putting this in a serializer alone would leave objects.create(), the
+        admin, fixtures and shell scripts free to write whatever they like -
+        which is exactly how 88 tickets ended up holding seats from other
+        airplanes at prices their buyers chose themselves.
+        """
+        if self._state.adding:
+            # atomic() nests as a savepoint when the caller already opened a
+            # transaction (OrderSerializer.create() does) or starts a fresh one
+            # otherwise (a direct POST to /api/ticket/, the admin, a shell).
+            # Either way the select_for_update() lock inside clean() is always
+            # valid, so the capacity check can never be skipped by a caller that
+            # forgot to wrap this in @transaction.atomic - and it always covers
+            # both the check and the insert that follows it.
+            with transaction.atomic():
+                # Captured once, at purchase time: a later fare change must
+                # never rewrite what somebody already paid.
+                self.price = self.flight.price_for(self._seat_class())
+                # Nothing else calls clean(); full_clean() also checks the
+                # unique constraint before the database has to reject the insert.
+                self.full_clean()
+                super().save(*args, **kwargs)
+        else:
+            super().save(*args, **kwargs)
 
 
 class Order(models.Model):

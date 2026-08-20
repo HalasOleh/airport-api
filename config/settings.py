@@ -20,7 +20,13 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv("DEBUG", "True") == "True"
 
-ALLOWED_HOSTS = ["*"]
+# Not a wildcard any more: AllowedHostsOriginValidator reads this list to
+# decide which sites may open a WebSocket, and it returns True for every
+# origin as soon as "*" appears here. With the JWT now living in a cookie,
+# that would leave the socket open to cross-site hijacking.
+ALLOWED_HOSTS = [h.strip() for h in os.getenv(
+    "ALLOWED_HOSTS", "localhost,127.0.0.1,[::1]"
+).split(",") if h.strip()]
 
 
 # Application definition
@@ -34,6 +40,8 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    # Required by pgvector's HnswIndex, which subclasses PostgresIndex.
+    'django.contrib.postgres',
     'airports',
     'user',
     'rest_framework',
@@ -135,8 +143,7 @@ REST_FRAMEWORK = {
         "config.permissions.IsAdminAllORIsAuthenticatedReadOnly",
     ],
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
-        "rest_framework.authentication.SessionAuthentication",
+        "user.authentication.CookieJWTAuthentication",
     ],
     "DEFAULT_THROTTLE_CLASSES": [
         "rest_framework.throttling.AnonRateThrottle",
@@ -158,6 +165,26 @@ SIMPLE_JWT = {
     "USER_ID_FIELD": "id",
     "USER_ID_CLAIM": "user_id",
 }
+
+# --- Cookie-based JWT -------------------------------------------------
+#
+# The WebSocket API (`new WebSocket(url)`) has no way to set request
+# headers, so an Authorization header can never reach the WS handshake from
+# a browser. A cookie can: the browser attaches it to every request to the
+# origin, handshake included. These names are shared by the three places
+# that read the token - the login view, CookieJWTAuthentication (HTTP) and
+# JWTAuthMiddleware (WebSocket) - so they cannot drift apart.
+JWT_ACCESS_COOKIE = "access_token"
+JWT_REFRESH_COOKIE = "refresh_token"
+
+# httponly: JavaScript cannot read it, so an XSS cannot exfiltrate the token.
+# secure: HTTPS only. Off under DEBUG because localhost is plain http.
+# samesite="Lax": the cookie is not sent on cross-site POSTs, which removes
+# the most common CSRF vector - but not all of them, so CSRF checks stay on.
+JWT_COOKIE_SECURE = not DEBUG
+JWT_COOKIE_SAMESITE = "Lax"
+# Path "/" so one cookie covers both /api/... and /ws/... on this origin.
+JWT_COOKIE_PATH = "/"
 
 AUTH_USER_MODEL = "user.User"
 

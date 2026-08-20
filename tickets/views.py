@@ -15,6 +15,7 @@ from config import settings
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status as http_status
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.throttling import UserRateThrottle, AnonRateThrottle
 from rest_framework.response import Response
 from rest_framework.generics import get_object_or_404
@@ -30,9 +31,12 @@ logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
 
-class  TicketViewSet(viewsets.ModelViewSet):
+class TicketViewSet(viewsets.ModelViewSet):
     queryset = Ticket.objects.all()
     serializer_class = TicketSerializer
+    # Without this the project-wide default (admin writes, everyone else reads)
+    # applies and no ordinary user can book anything.
+    permission_classes = (IsAuthenticated,)
     filterset_fields = ["status", "seat", "flight", "price"]
     
     def get_serializer_class(self):
@@ -50,6 +54,7 @@ class  TicketViewSet(viewsets.ModelViewSet):
 class OrderViewSet(viewsets.ModelViewSet):
     queryset = Order.objects.all()
     serializer_class = OrderSerializer
+    permission_classes = (IsAuthenticated,)
     filterset_fields = ["user"]
 
 #    def get_queryset(self):
@@ -68,11 +73,17 @@ class OrderViewSet(viewsets.ModelViewSet):
 
 
 class SuccessView(APIView):
+    permission_classes = (IsAuthenticated,)
+
     def get(self, request):
         session_id = request.query_params.get("session_id")
         if not session_id:
             return Response({"detail": "Session ID is required."}, status=http_status.HTTP_400_BAD_REQUEST)
-        payment = get_object_or_404(Payment, stripe_session_id=session_id)
+        # Scoped to the buyer: a leaked session id must not expose someone
+        # else's order.
+        payment = get_object_or_404(
+            Payment, stripe_session_id=session_id, order__user=request.user
+        )
         serializer = PaymentRetrieveSerializer(payment)
         return Response(serializer.data, status=http_status.HTTP_200_OK)
     
@@ -82,6 +93,7 @@ class CheckoutRateThrottle(UserRateThrottle):
 
 
 class CreateCheckoutSessionView(APIView):
+    permission_classes = (IsAuthenticated,)
     throttle_classes = [CheckoutRateThrottle, AnonRateThrottle]
 
     
@@ -163,28 +175,52 @@ class StripeWebhookView(APIView):
 
         logger.info(f"Event type: {event['type']}")
 
-        if event["type"] == "checkout.session.completed":    
-            handle_checkout_session(self, event, payment_status=Payment.Status.SUCCEEDED, order_status=Order.Status.COMPLETED)
-
+        if event["type"] == "checkout.session.completed":
+            handle_checkout_session(
+                event,
+                payment_status=Payment.Status.SUCCEEDED,
+                order_status=Order.Status.COMPLETED,
+            )
         elif event["type"] == "checkout.session.expired":
-            handle_checkout_session(self, event, payment_status=Payment.Status.FAILED, order_status=Order.Status.CANCELLED)
+            handle_checkout_session(
+                event,
+                payment_status=Payment.Status.FAILED,
+                order_status=Order.Status.CANCELLED,
+            )
         else:
-            logger.warning(f"Unhandled event type: {event['type']}")
-            return Response({"detail": "Payment not found."}, status=http_status.HTTP_404_NOT_FOUND)
-        return Response(status=http_status.HTTP_200_OK) # TODO: handle other event types if needed№#
+            # Stripe retries every non-2xx response with backoff for days, so an
+            # event type we simply do not handle still has to be acknowledged.
+            logger.info("Ignoring unhandled event type: %s", event["type"])
+
+        return Response(status=http_status.HTTP_200_OK)
 
 def handle_checkout_session(event, payment_status, order_status):
-            session = event["data"]["object"]
-            payment = Payment.objects.filter(stripe_session_id=session["id"]).first()
-            
-            if not payment:
-                logger.error(f"Payment not found for expired session: {session['id']}")
-                return Response({"detail": "Payment not found."}, status=http_status.HTTP_404_NOT_FOUND)
-            
-            with transaction.atomic():
-                payment.status = payment_status
-                payment.save()
+    session = event["data"]["object"]
+    payment = Payment.objects.filter(stripe_session_id=session["id"]).first()
 
-                payment.order.status = order_status
-                payment.order.save()
-                logger.info(f"Order {payment.order.id } updated to {order_status}")
+    if not payment:
+        logger.error("No payment recorded for Stripe session %s", session["id"])
+        return
+
+    with transaction.atomic():
+        payment.status = payment_status
+        # The payment intent does not exist yet when the checkout session is
+        # created, so this is the only place it can be recorded.
+        payment.stripe_payment_intent = (
+            session.get("payment_intent") or payment.stripe_payment_intent
+        )
+        payment.save(update_fields=["status", "stripe_payment_intent"])
+
+        payment.order.status = order_status
+        payment.order.save(update_fields=["status"])
+        logger.info("Order %s updated to %s", payment.order.id, order_status)
+
+    if payment_status == Payment.Status.SUCCEEDED:
+        try:
+            send_payment_confirmation_email(payment)
+        except Exception:
+            # Mail must never fail the webhook: a non-2xx makes Stripe replay a
+            # payment that has already been applied.
+            logger.exception(
+                "Confirmation email failed for payment %s", payment.id
+            )

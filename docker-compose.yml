@@ -1,6 +1,8 @@
 services:
   db:
-    image: postgres:17
+    # Same PostgreSQL 17 as before, plus the pgvector extension. The existing
+    # data volume stays compatible; only the extension is added.
+    image: pgvector/pgvector:pg17
     env_file:
       - .env
     environment:
@@ -13,8 +15,8 @@ services:
       - "5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
-      interval: 60s
-      timeout: 60s
+      interval: 10s
+      timeout: 10s
       retries: 5
 
   redis:
@@ -33,7 +35,9 @@ services:
     build:
       context: .
       dockerfile: config/Dockerfile
-    command: sh -c "python manage.py migrate && daphne -b 0.0.0.0 -p 8000 config.asgi:application"
+    # reindex_kb is intentionally not chained with && - a failed embedding
+    # run must not stop the web server from starting. It logs and moves on.
+    command: sh -c "python manage.py migrate && { python manage.py reindex_kb || echo 'reindex_kb failed, serving the existing index'; } && daphne -b 0.0.0.0 -p 8000 config.asgi:application"
     volumes:
       - .:/app
     ports:

@@ -1,4 +1,3 @@
-import ast
 import asyncio
 import json
 import logging
@@ -8,110 +7,42 @@ import requests
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from google import genai
+from google.genai import types as genai_types
 from openai import AsyncOpenAI
 
 from airports.models import Flight
 from ai_bot.models import ChatDialog, ChatMessage
-
-from pathlib import Path
-
-KNOWLEDGE_BASE_DIR = Path(__file__).resolve().parent / "knowledge_base"
+from ai_bot.rag import retrieval
 
 logger = logging.getLogger(__name__)
 
 
-def load_documents():
-    docs = []
-    docs_folder = KNOWLEDGE_BASE_DIR
-
-    try:
-        if not os.path.exists(docs_folder):
-            print(f"Warning: {docs_folder} does not exist")
-            return docs
-
-        for filename in os.listdir(docs_folder):
-            if filename.endswith('.txt'):
-                try:
-                    with open(os.path.join(docs_folder, filename), 'r', encoding='utf-8') as f:
-                        content = f.read()
-                        docs.append({
-                            'filename': filename,
-                            'content': content
-                        })
-                except Exception as e:
-                    print(f"Error loading {filename}: {e}")
-
-        print(f"Loaded {len(docs)} documents")
-    except Exception as e:
-        print(f"Error loading documents: {e}")
-
-    return docs
-
-
-def search_documents(documents, query): # Improved keyword search with scoring
-    query_lower = query.lower()
-    query_words = [word for word in query_lower.split() if len(word) > 2]  # Ignore short words
-
-    if not query_words:
-        return ""
-
-    scored_docs = []
-
-    for doc in documents:
-        content_lower = doc['content'].lower()
-        score = 0
-
-        # Count words in the document
-        for word in query_words:
-            if word in content_lower:
-                # Give higher score if word appears multiple times
-                score += content_lower.count(word)
-
-        if score > 0:
-            scored_docs.append((score, doc))
-
-    # Sort by score (highest first) and take top 2 most relevant
-    scored_docs.sort(reverse=True, key=lambda x: x[0])
-    relevant = [doc['content'] for score, doc in scored_docs[:2]]
-
-    return "\n\n".join(relevant) if relevant else ""
-
-PHONE_TOOL = {
+KNOWLEDGE_TOOL = {
     "type": "function",
     "function": {
-        "name": "get_phone_number",
-        "description": "Get the contact details of an airport department.",
+        "name": "search_knowledge_base",
+        "description": (
+            "Search the airport knowledge base for parking information, "
+            "department phone numbers and email addresses, airports, cities, "
+            "countries, airlines and airplanes. Use it whenever the answer "
+            "should come from airport reference data rather than from memory."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
-                "department": {
+                "query": {
                     "type": "string",
                     "description": (
-                        "Department name, for example Customer Support, "
-                        "Sales Department, Technical Support, Emergency Contact."
+                        "What to look up, in the user's own words, "
+                        "for example 'parking at Boryspil' or 'technical support phone'."
                     ),
-                }
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "How many passages to return. Defaults to 4.",
+                },
             },
-            "required": ["department"],
-            "additionalProperties": False,
-        },
-    },
-}
-
-PARKING_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "get_place",
-        "description": "Get the parking place for a given airport.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "airport": {
-                    "type": "string",
-                    "description": "Airport name, for example Heathrow, JFK, Boryspil.",
-                }
-            },
-            "required": ["airport"],
+            "required": ["query"],
             "additionalProperties": False,
         },
     },
@@ -159,81 +90,6 @@ FLIGHT_STATUS_TOOL = {
     },
 }
 
-
-def get_place(airport: str) -> dict:
-    parking_file = KNOWLEDGE_BASE_DIR / "parking_info.txt"
-    try:
-        with open(parking_file, "r", encoding="utf-8") as f:
-            parking_text = f.read()
-    except FileNotFoundError:
-        return {
-            "airport": airport,
-            "place": "Parking information file not found",
-            "condition": "unknown",
-        }
-    except Exception as exc:
-        return {
-            "airport": airport,
-            "place": f"Error reading parking info: {exc}",
-            "condition": "unknown",
-        }
-
-    airport_query = (airport or "").strip().lower()
-    for block in [block.strip() for block in parking_text.split("\n\n") if block.strip()]:
-        if airport_query and airport_query in block.lower():
-            return {
-                "airport": airport,
-                "place": block,
-                "condition": "available",
-                "source": "ai_bot/knowledge_base/parking_info.txt",
-            }
-
-    return {
-        "airport": airport,
-        "place": "No parking information found for this airport",
-        "condition": "unknown",
-        "source": "ai_bot/knowledge_base/parking_info.txt",
-    }
-
-def load_phone_book() -> dict:
-    # The file stores a Python dict literal: `company_contact_info = {...}`
-    phone_file = KNOWLEDGE_BASE_DIR / "phone_numbers.txt"
-    raw = phone_file.read_text(encoding="utf-8")
-    _, _, literal = raw.partition("=")
-    return ast.literal_eval(literal.strip())
-
-
-def get_phone_number(department: str) -> dict:
-    try:
-        phone_book = load_phone_book()
-    except FileNotFoundError:
-        return {
-            "department": department,
-            "phone_number": "Phone numbers file not found",
-            "condition": "unknown",
-        }
-    except (ValueError, SyntaxError) as exc:
-        return {
-            "department": department,
-            "phone_number": f"Phone numbers file is malformed: {exc}",
-            "condition": "unknown",
-        }
-
-    query = (department or "").strip().lower()
-    for name, info in phone_book.items():
-        if query and (query in name.lower() or name.lower() in query):
-            return {
-                "department": name,
-                "contact_data": info,
-                "condition": "available",
-            }
-
-    return {
-        "department": department,
-        "phone_number": "No phone number found for this department",
-        "available_departments": list(phone_book),
-        "condition": "unknown",
-    }
 
 def get_weather(city: str) -> dict:
     api_key = os.getenv("WEATHER_API_KEY", "")
@@ -333,12 +189,63 @@ def save_chat_message(dialog_id, role, content):
     )
         
 
+# Both providers get the same instructions. Keeping one copy is what stops
+# the two branches from drifting into two different products - the Gemini
+# path used to have no system prompt at all, so it answered anything.
+SYSTEM_PROMPT = (
+    "You are an airport assistant. You answer only questions about airports "
+    "and air travel: parking, terminals, airport department contacts, "
+    "airports, cities, countries, airlines, airplanes, flights and flight "
+    "status, and the weather in a city you were asked about. "
+    #
+    # Without this paragraph the model treats its role as a description of
+    # itself rather than a limit, and happily explains what a burger is.
+    "Everything else is out of scope: recipes, general knowledge, coding, "
+    "personal advice, news, maths. Refuse it with exactly this sentence, "
+    "translated into the language the user wrote in and with nothing else "
+    "added before or after it: \"Sorry, I can't answer that - I'm an "
+    "airport assistant.\" Do not answer partially, do not give a general "
+    "overview first, and do not ask a clarifying question to check whether "
+    "an off-topic subject was secretly about the airport - refuse "
+    "immediately instead. A subject does not become in scope just because "
+    "it could exist at an airport, or because the user says 'in general' "
+    "or insists after a refusal - burgers in general are off topic even "
+    "though airports sell them, and a second refusal looks exactly like "
+    "the first. "
+    #
+    "Available tools: "
+    "- search_knowledge_base: parking information, department phone "
+    "numbers and emails, airports, cities, countries, airlines, airplanes "
+    "- get_weather: current weather "
+    "- get_flight_status: flight information between airports. "
+    "For anything about airport reference data, call search_knowledge_base "
+    "first and answer only from the passages it returns. Those passages are "
+    "the nearest matches, not necessarily relevant ones: each carries a "
+    "similarity score, and a search always returns something. Read them and "
+    "decide. If none of them actually answers the question, say you do not "
+    "have that information rather than stretching an unrelated passage into "
+    "an answer."
+)
+
+
+@database_sync_to_async
+def search_knowledge_base(query: str, top_k: int = retrieval.DEFAULT_TOP_K) -> dict:
+    """Vector search over the knowledge base.
+
+    Wrapped because it both queries the database and runs the embedding model,
+    neither of which belongs on the event loop.
+    """
+    return retrieval.search_knowledge_base(query, top_k)
+
+
 FUNCTIONS = {
-    "get_place": get_place,
     "get_weather": get_weather,
     "get_flight_status": get_flight_status,
-    "get_phone_number": get_phone_number,
+    "search_knowledge_base": search_knowledge_base,
 }
+
+# Already awaitable; everything else is handed to a worker thread.
+ASYNC_FUNCTIONS = {"get_flight_status", "search_knowledge_base"}
 
 
 class TestConsumer(AsyncWebsocketConsumer):
@@ -358,23 +265,10 @@ class TestConsumer(AsyncWebsocketConsumer):
         await self.accept()
 
         self.provider = None
-        # Run synchronous file I/O in a thread to avoid blocking the event loop
-        self.documents = await asyncio.to_thread(load_documents)
         # conversation memory lives here, for the life of this connection
 
         self.messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are an airport assistant. "
-                    "Use available tools and document context to answer user questions. "
-                    "Available tools: "
-                    "- get_place: parking locations "
-                    "- get_phone_number: phone numbers "
-                    "- get_weather: current weather "
-                    "- get_flight_status: flight information between airports"
-                ),
-            }
+            {"role": "system", "content": SYSTEM_PROMPT}
         ]
 
         if self.dialog:
@@ -404,7 +298,7 @@ class TestConsumer(AsyncWebsocketConsumer):
                 self.provider = None
                 return
             self.provider = chosen
-            print(f"Client connected. Using {self.provider} as provider.")
+            logger.info("Client selected provider %s", self.provider)
             await self.send(text_data=json.dumps({"status": f"using {self.provider}"}))
             return
 
@@ -449,28 +343,23 @@ class TestConsumer(AsyncWebsocketConsumer):
             response = await client.aio.models.generate_content(
                 model="gemini-3.6-flash",
                 contents=user_message,
+                config=genai_types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                ),
             )
             reply_text = response.text
             self.messages.append({"role": "assistant", "content": reply_text})
             return reply_text
 
         else:
-            # Run synchronous CPU-bound search in a thread
-            context = await asyncio.to_thread(search_documents, self.documents, user_message)
-            logger.info(f"Context: {context}")
-            self.messages[0]["content"] = f"""You are an airport assistant.
-
-            Available information:
-            {context}
-
-            Use the tools when appropriate."""
-
+            # No pre-retrieval: the model decides when to search, so a greeting
+            # never costs an embedding call.
             client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
             response = await client.chat.completions.create(
                 model="gpt-5.4-nano",
                 messages=self.messages,
-                tools=[PARKING_TOOL, WEATHER_TOOL, FLIGHT_STATUS_TOOL, PHONE_TOOL],
+                tools=[KNOWLEDGE_TOOL, WEATHER_TOOL, FLIGHT_STATUS_TOOL],
             )
 
             message = response.choices[0].message
@@ -511,8 +400,12 @@ class TestConsumer(AsyncWebsocketConsumer):
         logger.info("Tool call %s(%s)", function_name, function_args)
 
         try:
-            # get_flight_status is already awaitable (database_sync_to_async)
-            if function_name == "get_flight_status":
+            # Two kinds of tools live in FUNCTIONS. The ones in ASYNC_FUNCTIONS
+            # are already wrapped in database_sync_to_async, so they are awaited
+            # directly. The rest are plain blocking functions (HTTP calls, file
+            # reads) and must go to a worker thread, or they would freeze the
+            # event loop and stall every other WebSocket connection.
+            if function_name in ASYNC_FUNCTIONS:
                 return await function(**function_args)
             # Synchronous functions (file I/O, HTTP requests) go to a thread
             return await asyncio.to_thread(function, **function_args)

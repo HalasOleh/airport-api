@@ -25,6 +25,18 @@
         button {
             padding: 10px 14px;
         }
+
+        .row {
+            margin-bottom: 12px;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        #who {
+            color: #555;
+        }
     </style>
 </head>
 <body>
@@ -32,75 +44,131 @@
 
     {% csrf_token %}
 
-    <p style="color:#555;">
-        Authenticated with your Django session &mdash; log in at
-        <a href="/admin/">/admin/</a> first if requests come back as 403.
-    </p>
-
-    <div style="margin-bottom:12px;">
-        <label>Dialog ID:</label>
-        <input id="dialogId" style="width:120px; margin-left:8px;" placeholder="1" />
-        <button id="createDialog">Create dialog</button>
-        <button id="connect">Connect</button>
+    <div id="auth" class="hidden">
+        <div class="row">
+            <label>Email:</label>
+            <input id="email" type="email" style="width:260px; margin-left:8px;" autocomplete="username" />
+        </div>
+        <div class="row">
+            <label>Password:</label>
+            <input id="password" type="password" style="width:260px; margin-left:8px;" autocomplete="current-password" />
+            <button id="login">Log in</button>
+        </div>
     </div>
 
-    <div style="margin-bottom:12px;">
-        <label>Provider:</label>
-        <button class="provider-btn" data-provider="gemini">gemini</button>
-        <button class="provider-btn" data-provider="openai">openai</button>
-        <span style="margin-left:12px;">or type:</span>
-        <input id="provider" value="" style="width:120px; margin-left:8px;" placeholder="custom provider" />
-        <button id="setProvider">Set provider</button>
-    </div>
+    <div id="app" class="hidden">
+        <div class="row">
+            <span id="who"></span>
+            <button id="logout" style="margin-left:12px;">Log out</button>
+        </div>
 
-    <input id="message" value="Tell me about airports" style="width:70%;">
-    <button id="send">Send message</button>
+        <div class="row">
+            <label>Dialog ID:</label>
+            <input id="dialogId" style="width:120px; margin-left:8px;" placeholder="1" />
+            <button id="createDialog">Create dialog</button>
+            <button id="connect">Connect</button>
+        </div>
+
+        <div class="row">
+            <label>Provider:</label>
+            <button class="provider-btn" data-provider="gemini">gemini</button>
+            <button class="provider-btn" data-provider="openai">openai</button>
+            <span style="margin-left:12px;">or type:</span>
+            <input id="provider" value="" style="width:120px; margin-left:8px;" placeholder="custom provider" />
+            <button id="setProvider">Set provider</button>
+        </div>
+
+        <input id="message" value="Tell me about airports" style="width:70%;">
+        <button id="send">Send message</button>
+    </div>
 
     <textarea id="log" readonly></textarea>
 
     <script>
+        // The JWT lives in an httpOnly cookie. This page cannot read it, cannot
+        // store it and cannot put it in a URL - the browser attaches it to every
+        // request to this origin on its own, WebSocket handshake included. All
+        // the token bookkeeping that used to live here is gone as a result.
+        const LOGIN_URL = "/api/user/login/";
+        const LOGOUT_URL = "/api/user/logout/";
+        const ME_URL = "/api/user/me/";
+        const DIALOGS_URL = "/api/chat/dialogs/";
+
         const protocol = window.location.protocol === "https:" ? "wss" : "ws";
         let socket = null;
+        let providerSelected = false;
 
         const log = document.getElementById("log");
+        const authBox = document.getElementById("auth");
+        const appBox = document.getElementById("app");
+        const who = document.getElementById("who");
+        const emailInput = document.getElementById("email");
+        const passwordInput = document.getElementById("password");
         const dialogIdInput = document.getElementById("dialogId");
         const messageInput = document.getElementById("message");
         const providerInput = document.getElementById("provider");
         const setProviderBtn = document.getElementById("setProvider");
         const providerButtons = document.querySelectorAll(".provider-btn");
-        const connectBtn = document.getElementById("connect");
-        const createDialogBtn = document.getElementById("createDialog");
-        let providerSelected = false;
 
         function writeLog(message) {
             log.value += `${message}\n`;
             log.scrollTop = log.scrollHeight;
         }
 
+        // --- requests ------------------------------------------------------
+
         function getCsrfToken() {
             const field = document.querySelector("[name=csrfmiddlewaretoken]");
             return field ? field.value : "";
         }
 
-        async function createDialog() {
-            const response = await fetch("/api/chat/dialogs/", {
-                method: "POST",
+        // credentials: "same-origin" is what sends the cookie. X-CSRFToken is
+        // required because a cookie is attached to cross-site requests too, so
+        // the server needs proof the request came from our own page.
+        function api(url, options = {}) {
+            return fetch(url, {
+                ...options,
                 credentials: "same-origin",
                 headers: {
+                    ...(options.headers || {}),
                     "X-CSRFToken": getCsrfToken(),
                     "Content-Type": "application/json",
                 },
+            });
+        }
+
+        // --- screens -------------------------------------------------------
+
+        function showLogin(reason) {
+            if (reason) writeLog(reason);
+            authBox.classList.remove("hidden");
+            appBox.classList.add("hidden");
+            emailInput.focus();
+        }
+
+        function showApp(user) {
+            who.textContent = `Signed in as ${user.email} (id ${user.id})`;
+            authBox.classList.add("hidden");
+            appBox.classList.remove("hidden");
+        }
+
+        // --- dialogs and socket --------------------------------------------
+
+        async function createDialog() {
+            const response = await api(DIALOGS_URL, {
+                method: "POST",
                 body: JSON.stringify({ title: "WebSocket test chat" }),
             });
 
             const data = await response.json();
             if (!response.ok) {
                 writeLog(`Create dialog failed: ${JSON.stringify(data)}`);
-                return;
+                return null;
             }
 
             dialogIdInput.value = data.id;
             writeLog(`Dialog created: ${data.id}`);
+            return data.id;
         }
 
         function connectSocket() {
@@ -110,7 +178,7 @@
                 return;
             }
 
-            // The session cookie is sent with the handshake; no token in the URL.
+            // No ?token= any more: the cookie rides along with the handshake.
             socket = new WebSocket(
                 `${protocol}://${window.location.host}/ws/chat/${dialogId}/`
             );
@@ -127,16 +195,12 @@
                 } else if (data.status) {
                     writeLog(`Status: ${data.status}`);
                     providerSelected = true;
-                    providerInput.disabled = true;
-                    setProviderBtn.disabled = true;
-                    providerButtons.forEach(btn => btn.disabled = true);
+                    setProviderEnabled(false);
                     writeLog('Now send messages (Step 2) using the "Send message" button');
                 } else if (data.error) {
                     writeLog(`Error: ${data.error}`);
                     providerSelected = false;
-                    providerInput.disabled = false;
-                    setProviderBtn.disabled = false;
-                    providerButtons.forEach(btn => btn.disabled = false);
+                    setProviderEnabled(true);
                 } else {
                     writeLog(`Reply: ${event.data}`);
                 }
@@ -150,10 +214,14 @@
             socket.onclose = () => {
                 writeLog("Disconnected");
                 providerSelected = false;
-                providerInput.disabled = false;
-                setProviderBtn.disabled = false;
-                providerButtons.forEach(btn => btn.disabled = false);
+                setProviderEnabled(true);
             };
+        }
+
+        function setProviderEnabled(enabled) {
+            providerInput.disabled = !enabled;
+            setProviderBtn.disabled = !enabled;
+            providerButtons.forEach(btn => btn.disabled = !enabled);
         }
 
         function sendProvider(provider) {
@@ -166,32 +234,88 @@
             writeLog(`Trying provider: ${provider}`);
         }
 
-        createDialogBtn.addEventListener("click", createDialog);
-        connectBtn.addEventListener("click", connectSocket);
+        // --- startup -------------------------------------------------------
+
+        async function autoStart(user) {
+            showApp(user);
+            if (!dialogIdInput.value.trim() && !(await createDialog())) return;
+            connectSocket();
+        }
+
+        async function init() {
+            // The browser restores field values on reload; start from a clean log.
+            log.value = "";
+            dialogIdInput.value = "";
+
+            // The only way to find out whether we are signed in: ask the server.
+            // The page cannot inspect an httpOnly cookie, and that is the point.
+            const response = await api(ME_URL);
+            if (response.ok) {
+                return autoStart(await response.json());
+            }
+
+            writeLog(`Not signed in (${ME_URL} returned ${response.status}).`);
+            showLogin("Please log in.");
+        }
+
+        document.getElementById("login").addEventListener("click", async () => {
+            const email = emailInput.value.trim();
+            const password = passwordInput.value;
+            if (!email || !password) {
+                writeLog("Email and password are required.");
+                return;
+            }
+
+            const response = await api(LOGIN_URL, {
+                method: "POST",
+                body: JSON.stringify({ email, password }),
+            });
+
+            const data = await response.json();
+            if (!response.ok) {
+                writeLog(`Login failed: ${JSON.stringify(data)}`);
+                return;
+            }
+
+            passwordInput.value = "";
+            writeLog("Logged in, cookie set by the server.");
+            init();
+        });
+
+        document.getElementById("logout").addEventListener("click", async () => {
+            // Only the server can clear an httpOnly cookie.
+            await api(LOGOUT_URL, { method: "POST" });
+            if (socket) socket.close();
+            writeLog("Logged out.");
+            showLogin();
+        });
+
+        document.getElementById("createDialog").addEventListener("click", createDialog);
+        document.getElementById("connect").addEventListener("click", connectSocket);
 
         providerButtons.forEach(button => {
             button.addEventListener("click", () => sendProvider(button.dataset.provider));
         });
 
         setProviderBtn.addEventListener("click", () => {
-            const provider = providerInput.value.trim();
-            if (!provider) return;
-            sendProvider(provider);
+            sendProvider(providerInput.value.trim());
         });
 
         document.getElementById("send").addEventListener("click", () => {
-            const msg = messageInput.value;
             if (!socket || socket.readyState !== WebSocket.OPEN) {
                 writeLog("Connect WebSocket first.");
                 return;
             }
             if (!providerSelected) {
-                writeLog('Please choose a valid provider first.');
+                writeLog("Please choose a valid provider first.");
                 return;
             }
+            const msg = messageInput.value;
             socket.send(JSON.stringify({ message: msg }));
             writeLog(`Sent: ${msg}`);
         });
+
+        init();
     </script>
 </body>
 </html>
