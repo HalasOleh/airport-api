@@ -2,7 +2,7 @@ from django.db import transaction
 from django.contrib.auth import get_user_model
 from rest_framework.validators import UniqueTogetherValidator
 
-from tickets.models import Ticket, Order
+from tickets.models import Payment, Ticket, Order
 from airports.models import Seat, Flight
 from rest_framework import serializers
 
@@ -20,11 +20,14 @@ class TicketSerializer(serializers.ModelSerializer):
     class Meta:
         model = Ticket
         fields = ("id", "status", "seat", "flight", "price")
-        read_only_fields = ("id", "created_at")
+        read_only_fields = ("id", "status")
         validators = [
             UniqueTogetherValidator(
-                queryset=Ticket.objects.all(),
-                fields=["seat", "flight"])
+                queryset=Ticket.objects.filter(
+                    status__in=[Ticket.Status.BOOKED, Ticket.Status.USED],
+                ),
+                fields=["seat", "flight"]
+                )
         ]
 
 class TicketListSerializer(TicketSerializer):
@@ -38,8 +41,16 @@ class OrderTicketSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Ticket
-        fields = ("seat", "flight", "status", "price")
-
+        fields = ("id", "status", "seat", "flight", "price")
+        read_only_fields = ("id", "status")
+        validators = [
+            UniqueTogetherValidator(
+                queryset=Ticket.objects.filter(
+                    status__in=[Ticket.Status.BOOKED, Ticket.Status.USED],
+                ),
+                fields=["seat", "flight"]
+                )
+        ]
 
 class OrderSerializer(serializers.ModelSerializer):
     tickets = OrderTicketSerializer(many=True, read_only=False, allow_empty=False)
@@ -55,7 +66,9 @@ class OrderSerializer(serializers.ModelSerializer):
 
         tickets_data = validated_data.pop("tickets")
         order = Order.objects.create(**validated_data)
-        
+        order.set_booked_until()
+        order.save()
+#
         for ticket_data in tickets_data:
             Ticket.objects.create(
                 order=order,
@@ -67,3 +80,16 @@ class OrderSerializer(serializers.ModelSerializer):
 
 class OrderRetrieveSerializer(OrderSerializer):
     tickets = TicketListSerializer(many=True)# many=True
+
+
+class PaymentRetrieveSerializer(serializers.ModelSerializer):
+    order = OrderRetrieveSerializer(read_only=True)
+
+    class Meta:
+        model = Payment
+        fields = ("id", "order", "stripe_session_id", "stripe_payment_intent", "amount", "currency", "status", "created_at")
+        read_only_fields = ("id", "order", "stripe_session_id", "stripe_payment_intent", "amount", "currency", "status", "created_at")
+
+class OrderIDSerializer(serializers.Serializer):
+    order_id = serializers.IntegerField(write_only=True)
+    
