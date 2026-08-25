@@ -9,6 +9,7 @@ requests
 stripe
 psycopg2-binary
 openai
+chromadb
 pgvector
 sentence-transformers
 mcp==1.29.0
