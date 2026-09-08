@@ -17,3 +17,12 @@ channels-redis
 redis<6
 daphne
 google-genai
+# Reads ai_bot/prompts/system_prompt.yaml. Already present via drf-spectacular,
+# but declared here because we import it directly.
+PyYAML
+
+# tests
+pytest
+pytest-django
+pytest-asyncio
+factory-boy

@@ -59,5 +59,34 @@ def reindex_source(source: SourceData, force: bool = False) -> dict:
     return {"source": source.name, "status": "reindexed", "chunks": len(source.chunks)}
 
 
+def prune_removed_sources(sources: list[SourceData]) -> list[str]:
+    """Delete indexed sources that no longer exist in the code.
+
+    Without this, retiring a source leaves its KnowledgeSource row and every one
+    of its chunks in the database forever, and vector search keeps returning
+    them - the retirement would have no effect at all.
+
+    Appearing in collect_sources() at all is what counts as "still here" -
+    including a source whose file failed to load. A broken file is not evidence
+    that the source was retired, and deleting its chunks over a typo would
+    repeat the mistake reindex_source() above is careful to avoid.
+    """
+    keep = [source.name for source in sources]
+    removed = list(
+        KnowledgeSource.objects.exclude(name__in=keep).values_list("name", flat=True)
+    )
+    if removed:
+        # KnowledgeChunk.source cascades, so the chunks go with the row.
+        KnowledgeSource.objects.filter(name__in=removed).delete()
+        logger.info("Removed %s retired source(s): %s", len(removed), ", ".join(removed))
+    return removed
+
+
 def reindex_all(force: bool = False) -> list[dict]:
-    return [reindex_source(source, force=force) for source in collect_sources()]
+    sources = collect_sources()
+    report = [reindex_source(source, force=force) for source in sources]
+
+    for name in prune_removed_sources(sources):
+        report.append({"source": name, "status": "removed", "chunks": 0})
+
+    return report

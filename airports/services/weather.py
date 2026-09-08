@@ -13,8 +13,12 @@ def get_weather(city: str = CITY, api_key: str | None = None) -> dict:
     if not key:
         raise ValueError("WEATHER_API_KEY is not set")
 
+    # params= rather than an f-string: the city now reaches this function from
+    # the chat bot's tool call, so it is user-steered text. Interpolated raw, a
+    # name containing "&" would smuggle in extra query parameters.
     response = requests.get(
-        f"http://api.weatherapi.com/v1/current.json?key={key}&q={city}&aqi={AIR_QUALITY}",
+        "http://api.weatherapi.com/v1/current.json",
+        params={"key": key, "q": city, "aqi": AIR_QUALITY},
         timeout=10,
     )
     response.raise_for_status()

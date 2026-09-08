@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      # pgvector, not plain postgres: the KnowledgeChunk migration runs
+      # CREATE EXTENSION vector and fails on an image that does not ship it.
+      db:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_DB: airport_db
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      SECRET_KEY: ci-secret-key-not-used-in-production
+      DEBUG: "False"
+      ALLOWED_HOSTS: localhost,127.0.0.1
+      DB_NAME: airport_db
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_HOST: localhost
+      DB_PORT: "5432"
+      # The embedding model is never loaded in tests - retrieval is patched -
+      # so torch stays out of the CI image entirely.
+      EMBEDDING_MODEL_NAME: intfloat/multilingual-e5-small
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          # CPU-only torch: the default wheel drags in the CUDA runtime, which
+          # is several gigabytes CI would download on every run for nothing.
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install -r requirements.txt
+
+      - name: Django checks
+        run: python manage.py check --deploy --fail-level ERROR
+
+      - name: Migrations are not missing
+        run: python manage.py makemigrations --check --dry-run
+
+      - name: Tests
+        run: python -m pytest
+
+      - name: Reference data is valid
+        run: python manage.py migrate && python manage.py validate_data --fail

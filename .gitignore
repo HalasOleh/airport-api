@@ -295,3 +295,8 @@ staticfiles/
 # Local project files
 .idea/
 backup.sql
+
+# Database dumps - never in the repo
+backup.dump
+backup.sql
+*.dump

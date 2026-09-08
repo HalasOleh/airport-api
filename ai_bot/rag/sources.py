@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 
 PHONE_SOURCE = "file:phone_numbers"
 PARKING_SOURCE = "file:parking_info"
-REFERENCE_SOURCE = "db:reference_data"
 
 
 @dataclass
@@ -90,74 +89,18 @@ def parking_source() -> SourceData:
     return SourceData(PARKING_SOURCE, chunks=chunks)
 
 
-def reference_data_source() -> SourceData:
-    """Index the slow-moving reference tables.
-
-    Flights are deliberately excluded: they change by the minute and exact
-    queries like "KBP to JFK tomorrow" belong in SQL, not in a vector search.
-    """
-    from airports.models import Airline, Airplane, Airport, City, Country
-
-    chunks = []
-
-    for country in Country.objects.all():
-        chunks.append(
-            Chunk(
-                content=f"{country.name} is a country with the code {country.code}.",
-                metadata={"kind": "country", "id": country.id, "code": country.code},
-            )
-        )
-
-    for city in City.objects.select_related("country"):
-        chunks.append(
-            Chunk(
-                content=f"{city.name} is a city in {city.country.name} ({city.country.code}).",
-                metadata={"kind": "city", "id": city.id},
-            )
-        )
-
-    for airport in Airport.objects.select_related("city", "country"):
-        chunks.append(
-            Chunk(
-                content=(
-                    f"Airport with the code {airport.code} serves the city of "
-                    f"{airport.city.name} in {airport.country.name} ({airport.country.code})."
-                ),
-                metadata={"kind": "airport", "id": airport.id, "code": airport.code},
-            )
-        )
-
-    for airline in Airline.objects.select_related("country").prefetch_related("airport"):
-        parts = [f"{airline.name} is an airline"]
-        if airline.country:
-            parts.append(f"based in {airline.country.name}")
-        if airline.founded_year:
-            parts.append(f"founded in {airline.founded_year}")
-        if airline.headquarters:
-            parts.append(f"headquartered in {airline.headquarters}")
-        codes = ", ".join(sorted(a.code for a in airline.airport.all()))
-        if codes:
-            parts.append(f"operating from airports {codes}")
-        chunks.append(
-            Chunk(
-                content=", ".join(parts) + ".",
-                metadata={"kind": "airline", "id": airline.id},
-            )
-        )
-
-    for airplane in Airplane.objects.select_related("airline"):
-        chunks.append(
-            Chunk(
-                content=(
-                    f"Airplane {airplane.model} with registration number "
-                    f"{airplane.reg_number} is operated by {airplane.airline.name}."
-                ),
-                metadata={"kind": "airplane", "id": airplane.id},
-            )
-        )
-
-    return SourceData(REFERENCE_SOURCE, chunks=chunks)
-
-
 def collect_sources() -> list[SourceData]:
-    return [phone_book_source(), parking_source(), reference_data_source()]
+    """The sources worth embedding.
+
+    Only free text lives here now. The reference tables - countries, cities,
+    airports, airlines, airplanes - used to be embedded too, and should not have
+    been: "Kyiv is a city in Ukraine (UA)." is a short categorical string with no
+    nuance for a vector to capture, so an exact `WHERE code = 'KBP'` beats
+    similarity search on accuracy and cost alike. Worse, those chunks competed
+    for the top-k against parking and contact text, where semantics do matter.
+    They are served by ai_bot/tools/reference_tools.py instead.
+
+    Flights were never indexed and still are not: they change by the minute, and
+    "KBP to JFK tomorrow" is a question for SQL - see ai_bot/tools/flight_tools.py.
+    """
+    return [phone_book_source(), parking_source()]

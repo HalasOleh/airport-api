@@ -1,160 +1,37 @@
-import asyncio
+"""WebSocket chat consumer.
+
+The consumer owns three things: the socket, the conversation history, and the
+tool-calling loop. It owns no domain knowledge - which tool answers a question,
+and with what arguments, is decided by the model and executed by
+ai_bot.tools.call_tool. There is no keyword matching over the user's text here.
+"""
 import json
 import logging
 import os
 
-import requests
-from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
+from channels.generic.websocket import AsyncWebsocketConsumer
 from google import genai
 from google.genai import types as genai_types
 from openai import AsyncOpenAI
 
-from airports.models import Flight
 from ai_bot.models import ChatDialog, ChatMessage
-from ai_bot.rag import retrieval
+from ai_bot.prompt import build_system_prompt
+from ai_bot.tools import TOOL_SCHEMAS, call_tool, gemini_tools
 
 logger = logging.getLogger(__name__)
 
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4-nano")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 
-KNOWLEDGE_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "search_knowledge_base",
-        "description": (
-            "Search the airport knowledge base for parking information, "
-            "department phone numbers and email addresses, airports, cities, "
-            "countries, airlines and airplanes. Use it whenever the answer "
-            "should come from airport reference data rather than from memory."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": (
-                        "What to look up, in the user's own words, "
-                        "for example 'parking at Boryspil' or 'technical support phone'."
-                    ),
-                },
-                "top_k": {
-                    "type": "integer",
-                    "description": "How many passages to return. Defaults to 4.",
-                },
-            },
-            "required": ["query"],
-            "additionalProperties": False,
-        },
-    },
-}
+# The model may need several passes: look up an airport code, then search
+# flights with it, then read the seat map. The ceiling is what stops a model
+# that keeps calling the same tool from looping forever.
+MAX_TOOL_ROUNDS = 5
 
-WEATHER_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "get_weather",
-        "description": "Get the current weather for a given city.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "city": {
-                    "type": "string",
-                    "description": "City name, for example Kyiv, London, New York.",
-                }
-            },
-            "required": ["city"],
-            "additionalProperties": False,
-        },
-    },
-}
-
-FLIGHT_STATUS_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "get_flight_status",
-        "description": "Get flight status and details by searching for flights between airports or by route.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "from_airport": {
-                    "type": "string",
-                    "description": "Departure airport code (3 letters, e.g., KBP, JFK, LWO) or city name.",
-                },
-                "to_airport": {
-                    "type": "string",
-                    "description": "Arrival airport code (3 letters) or city name.",
-                }
-            },
-            "required": ["from_airport", "to_airport"],
-            "additionalProperties": False,
-        },
-    },
-}
-
-
-def get_weather(city: str) -> dict:
-    api_key = os.getenv("WEATHER_API_KEY", "")
-    if not api_key:
-        return {
-            "error": "WEATHER_API_KEY is not set",
-            "city": city,
-        }
-
-    try:
-        response = requests.get(
-            f"http://api.weatherapi.com/v1/current.json?key={api_key}&q={city}&aqi=yes",
-            timeout=20,
-        )
-        response.raise_for_status()
-        data = response.json()
-
-        return {
-            "city": data["location"]["name"],
-            "temperature_c": data["current"]["temp_c"],
-            "condition": data["current"]["condition"]["text"],
-        }
-    except Exception as e:
-        return {
-            "error": f"Failed to get weather: {str(e)}",
-            "city": city,
-        }
-
-
-@database_sync_to_async
-def get_flight_status(from_airport: str, to_airport: str) -> dict: #Query database for flights between airports"
-    try:
-        # Search by airport code or city name
-        flights = Flight.objects.filter(
-            from_airport__code__icontains=from_airport.upper()
-        ).filter(
-            to_airport__code__icontains=to_airport.upper()
-        )
-
-        if not flights:
-            return {
-                "message": f"No flights found from {from_airport} to {to_airport}",
-                "flights": []
-            }
-
-        flight_list = []
-        for flight in flights:
-            flight_list.append({
-                "from": str(flight.from_airport),
-                "to": str(flight.to_airport),
-                "departure": flight.departure.strftime("%Y-%m-%d %H:%M"),
-                "arrival": flight.arrival.strftime("%Y-%m-%d %H:%M"),
-                "status": flight.status,
-                "airplane": str(flight.airplane) if flight.airplane else "Not assigned",
-            })
-
-        return {
-            "message": f"Found {len(flight_list)} flight(s)",
-            "flights": flight_list
-        }
-    except Exception as e:
-        return {
-            "error": f"Failed to get flight status: {str(e)}",
-            "flights": []
-        }
+# Rough cap on how much conversation goes back to the model. Trimming is done by
+# trim_history(), which will not cut a tool result away from its tool call.
+MAX_HISTORY_MESSAGES = 40
 
 
 @database_sync_to_async
@@ -187,65 +64,42 @@ def save_chat_message(dialog_id, role, content):
         role=role,
         content=content,
     )
-        
-
-# Both providers get the same instructions. Keeping one copy is what stops
-# the two branches from drifting into two different products - the Gemini
-# path used to have no system prompt at all, so it answered anything.
-SYSTEM_PROMPT = (
-    "You are an airport assistant. You answer only questions about airports "
-    "and air travel: parking, terminals, airport department contacts, "
-    "airports, cities, countries, airlines, airplanes, flights and flight "
-    "status, and the weather in a city you were asked about. "
-    #
-    # Without this paragraph the model treats its role as a description of
-    # itself rather than a limit, and happily explains what a burger is.
-    "Everything else is out of scope: recipes, general knowledge, coding, "
-    "personal advice, news, maths. Refuse it with exactly this sentence, "
-    "translated into the language the user wrote in and with nothing else "
-    "added before or after it: \"Sorry, I can't answer that - I'm an "
-    "airport assistant.\" Do not answer partially, do not give a general "
-    "overview first, and do not ask a clarifying question to check whether "
-    "an off-topic subject was secretly about the airport - refuse "
-    "immediately instead. A subject does not become in scope just because "
-    "it could exist at an airport, or because the user says 'in general' "
-    "or insists after a refusal - burgers in general are off topic even "
-    "though airports sell them, and a second refusal looks exactly like "
-    "the first. "
-    #
-    "Available tools: "
-    "- search_knowledge_base: parking information, department phone "
-    "numbers and emails, airports, cities, countries, airlines, airplanes "
-    "- get_weather: current weather "
-    "- get_flight_status: flight information between airports. "
-    "For anything about airport reference data, call search_knowledge_base "
-    "first and answer only from the passages it returns. Those passages are "
-    "the nearest matches, not necessarily relevant ones: each carries a "
-    "similarity score, and a search always returns something. Read them and "
-    "decide. If none of them actually answers the question, say you do not "
-    "have that information rather than stretching an unrelated passage into "
-    "an answer."
-)
 
 
-@database_sync_to_async
-def search_knowledge_base(query: str, top_k: int = retrieval.DEFAULT_TOP_K) -> dict:
-    """Vector search over the knowledge base.
+def parse_tool_arguments(raw):
+    """Tool arguments arrive as a JSON string the model wrote. Returns None if
+    it is not a usable object, which the caller reports back as a tool error."""
+    try:
+        arguments = json.loads(raw or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return arguments if isinstance(arguments, dict) else None
 
-    Wrapped because it both queries the database and runs the embedding model,
-    neither of which belongs on the event loop.
+
+def trim_history(messages, limit=MAX_HISTORY_MESSAGES):
+    """Drop the oldest turns, keeping tool calls and their results together.
+
+    A naive "last N messages" cut can leave a tool result whose assistant
+    message with the matching tool_call id was trimmed away. The API rejects
+    that outright, so the window is advanced to the next user message, which is
+    always a safe boundary.
     """
-    return retrieval.search_knowledge_base(query, top_k)
+    if len(messages) <= limit:
+        return messages
 
+    system, rest = messages[:1], messages[1:]
+    window = rest[-(limit - 1):]
 
-FUNCTIONS = {
-    "get_weather": get_weather,
-    "get_flight_status": get_flight_status,
-    "search_knowledge_base": search_knowledge_base,
-}
+    start = 0
+    while start < len(window) and window[start].get("role") != "user":
+        start += 1
 
-# Already awaitable; everything else is handed to a worker thread.
-ASYNC_FUNCTIONS = {"get_flight_status", "search_knowledge_base"}
+    if start == len(window):
+        # The whole window is one long tool exchange. Cutting anywhere inside it
+        # would orphan something, so leave the history alone this round.
+        return messages
+
+    return system + window[start:]
 
 
 class TestConsumer(AsyncWebsocketConsumer):
@@ -265,11 +119,10 @@ class TestConsumer(AsyncWebsocketConsumer):
         await self.accept()
 
         self.provider = None
-        # conversation memory lives here, for the life of this connection
-
-        self.messages = [
-            {"role": "system", "content": SYSTEM_PROMPT}
-        ]
+        # Built per connection, not at import: it carries today's date, and a
+        # module-level constant would freeze whichever day the worker booted on.
+        self.system_prompt = build_system_prompt()
+        self.messages = [{"role": "system", "content": self.system_prompt}]
 
         if self.dialog:
             saved_messages = await load_dialog_messages(self.dialog.id)
@@ -321,10 +174,10 @@ class TestConsumer(AsyncWebsocketConsumer):
             )
 
         try:
-            reply_text = await self.generate_reply(user_message)
+            reply_text = await self.generate_reply()
         except Exception:
-            # An upstream/model failure should surface as an error frame,
-            # not kill the socket and lose the conversation.
+            # An upstream/model failure should surface as an error frame, not
+            # kill the socket and lose the conversation.
             logger.exception("Failed to generate a reply via %s", self.provider)
             await self.send(text_data=json.dumps({"error": "Failed to generate a reply"}))
             return
@@ -337,83 +190,151 @@ class TestConsumer(AsyncWebsocketConsumer):
                 reply_text,
             )
 
-    async def generate_reply(self, user_message):
+    async def generate_reply(self):
         if self.provider == "gemini":
-            client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
-            response = await client.aio.models.generate_content(
-                model="gemini-3.6-flash",
-                contents=user_message,
-                config=genai_types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                ),
-            )
-            reply_text = response.text
-            self.messages.append({"role": "assistant", "content": reply_text})
-            return reply_text
+            return await self.generate_reply_gemini()
+        return await self.generate_reply_openai()
 
-        else:
-            # No pre-retrieval: the model decides when to search, so a greeting
-            # never costs an embedding call.
-            client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+    async def run_tool_call(self, name, raw_arguments):
+        """Execute one tool call and return its result dict.
 
+        call_tool is synchronous and touches the ORM, files and HTTP, so it goes
+        to a worker thread - on the event loop it would stall every other
+        WebSocket connection on this worker.
+
+        self.user comes from the authenticated scope and is passed positionally.
+        The model never supplies it: no tool schema declares a user parameter.
+        """
+        arguments = parse_tool_arguments(raw_arguments)
+        if arguments is None:
+            logger.warning("Tool %s: unreadable arguments %r", name, raw_arguments)
+            return {"error": f"Could not read the arguments for {name} as JSON."}
+
+        logger.info("Tool call %s(%s)", name, arguments)
+        return await database_sync_to_async(call_tool)(name, arguments, self.user)
+
+    async def generate_reply_openai(self):
+        client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+        for _ in range(MAX_TOOL_ROUNDS):
+            self.messages = trim_history(self.messages)
             response = await client.chat.completions.create(
-                model="gpt-5.4-nano",
+                model=OPENAI_MODEL,
                 messages=self.messages,
-                tools=[KNOWLEDGE_TOOL, WEATHER_TOOL, FLIGHT_STATUS_TOOL],
+                # Passed on every round, not just the first: without it the model
+                # cannot act on what a tool just returned.
+                tools=TOOL_SCHEMAS,
             )
 
             message = response.choices[0].message
-            reply_text = message.content
-            self.messages.append(message)
+            # Normalised to a plain dict so the history stays JSON-serialisable
+            # and uniform with the messages loaded from the database.
+            self.messages.append(message.model_dump(exclude_none=True))
 
-            if message.tool_calls:
-                for tool_call in message.tool_calls:
-                    function_response = await self.call_tool(tool_call)
-                    self.messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": json.dumps(function_response),
-                    })
+            if not message.tool_calls:
+                return message.content
 
-                second_response = await client.chat.completions.create(
-                    model="gpt-5.4-nano",
-                    messages=self.messages,
+            # A single response can ask for several tools at once. Each gets its
+            # own result message carrying its own tool_call_id.
+            for tool_call in message.tool_calls:
+                result = await self.run_tool_call(
+                    tool_call.function.name, tool_call.function.arguments
                 )
-                reply_text = second_response.choices[0].message.content
-                self.messages.append(second_response.choices[0].message)
+                self.messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": json.dumps(result, ensure_ascii=False, default=str),
+                })
 
-            return reply_text
+        # Out of rounds. Ask once more without tools so the model has to produce
+        # an answer instead of reaching for another call.
+        logger.warning("Tool loop hit %s rounds; forcing a text answer", MAX_TOOL_ROUNDS)
+        self.messages = trim_history(self.messages)
+        response = await client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=self.messages,
+        )
+        message = response.choices[0].message
+        self.messages.append(message.model_dump(exclude_none=True))
+        return message.content
 
-    async def call_tool(self, tool_call):
-        # Every failure here must come back as a tool result, otherwise the
-        # conversation is left with an unanswered tool_call id.
-        function_name = tool_call.function.name
-        function = FUNCTIONS.get(function_name)
-        if function is None:
-            return {"error": f"unknown function {function_name}"}
+    def gemini_contents(self):
+        """Replay the stored history as Gemini Content objects.
 
-        try:
-            function_args = json.loads(tool_call.function.arguments or "{}")
-        except json.JSONDecodeError:
-            return {"error": f"invalid arguments for {function_name}"}
+        Only the user/assistant text is carried over. Tool traffic from previous
+        turns is left behind - it is stored in the OpenAI shape, and the text
+        answer that followed it already contains what the next turn needs.
+        Within a single reply, tool calls and their responses are kept intact.
+        """
+        contents = []
+        for message in self.messages:
+            role = message.get("role")
+            content = message.get("content")
+            if role not in ("user", "assistant") or not content:
+                continue
+            contents.append(
+                genai_types.Content(
+                    role="user" if role == "user" else "model",
+                    parts=[genai_types.Part.from_text(text=content)],
+                )
+            )
+        return contents
 
-        logger.info("Tool call %s(%s)", function_name, function_args)
+    async def generate_reply_gemini(self):
+        client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+        config = genai_types.GenerateContentConfig(
+            system_instruction=self.system_prompt,
+            tools=[genai_types.Tool(function_declarations=gemini_tools())],
+            # The declarations are plain schemas, not Python callables, so the
+            # SDK must not try to invoke anything itself.
+            automatic_function_calling=genai_types.AutomaticFunctionCallingConfig(
+                disable=True
+            ),
+        )
 
-        try:
-            # Two kinds of tools live in FUNCTIONS. The ones in ASYNC_FUNCTIONS
-            # are already wrapped in database_sync_to_async, so they are awaited
-            # directly. The rest are plain blocking functions (HTTP calls, file
-            # reads) and must go to a worker thread, or they would freeze the
-            # event loop and stall every other WebSocket connection.
-            if function_name in ASYNC_FUNCTIONS:
-                return await function(**function_args)
-            # Synchronous functions (file I/O, HTTP requests) go to a thread
-            return await asyncio.to_thread(function, **function_args)
-        except TypeError as exc:
-            return {"error": f"bad arguments for {function_name}: {exc}"}
-        except Exception as exc:
-            logger.exception("Tool %s failed", function_name)
-            return {"error": f"{function_name} failed: {exc}"}
+        contents = self.gemini_contents()
+
+        for _ in range(MAX_TOOL_ROUNDS):
+            response = await client.aio.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=contents,
+                config=config,
+            )
+
+            candidate = response.candidates[0] if response.candidates else None
+            if candidate is None or candidate.content is None:
+                return response.text
+
+            contents.append(candidate.content)
+
+            function_calls = response.function_calls or []
+            if not function_calls:
+                reply_text = response.text
+                self.messages.append({"role": "assistant", "content": reply_text})
+                return reply_text
+
+            parts = []
+            for function_call in function_calls:
+                logger.info("Tool call %s(%s)", function_call.name, function_call.args)
+                result = await database_sync_to_async(call_tool)(
+                    function_call.name, dict(function_call.args or {}), self.user
+                )
+                parts.append(
+                    genai_types.Part.from_function_response(
+                        name=function_call.name, response=result
+                    )
+                )
+            contents.append(genai_types.Content(role="user", parts=parts))
+
+        logger.warning("Gemini tool loop hit %s rounds; forcing a text answer", MAX_TOOL_ROUNDS)
+        response = await client.aio.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=contents,
+            config=genai_types.GenerateContentConfig(system_instruction=self.system_prompt),
+        )
+        reply_text = response.text
+        self.messages.append({"role": "assistant", "content": reply_text})
+        return reply_text
 
     async def disconnect(self, close_code):
         pass

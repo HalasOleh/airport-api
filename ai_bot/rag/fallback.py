@@ -1,8 +1,14 @@
-"""Exact lookups used when vector search returns nothing confident enough.
+"""File readers, plus the last-resort lookups used when the index is empty.
 
-Semantic search is the primary path, but an exact department or airport name
-should never lose to a fuzzy neighbour, so these deterministic lookups stay as
-a safety net behind the similarity threshold.
+load_phone_book() and load_parking_blocks() are the real interface here; the
+chat bot's get_contacts tool reads the phone book through the first of them.
+
+get_phone_number() and get_place() below are NOT part of the tool path, and the
+substring matching in them is not a pattern to copy. Deciding which department
+or airport someone means is the model's job - it survives rephrasing and knows
+what was said three turns ago, neither of which a substring match can do. These
+two are reached only from retrieval._exact_lookup(), when the vector index is
+empty or was never built and the files on disk are all that is left.
 """
 import ast
 import logging

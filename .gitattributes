@@ -1,0 +1,9 @@
+# The repo has mixed line endings, so any tool that rewrites a file whole
+# turns half of it into a phantom diff. Normalise to LF in the index; Git
+# converts on checkout where the platform needs it.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.svg text
+*.dump binary

@@ -32,6 +32,10 @@ class Command(BaseCommand):
                 ))
             elif status == "unchanged":
                 self.stdout.write(f"{entry['source']}: unchanged ({entry['chunks']} chunks)")
+            elif status == "removed":
+                self.stdout.write(self.style.WARNING(
+                    f"{entry['source']}: retired - row and chunks deleted"
+                ))
             else:
                 self.stdout.write(self.style.SUCCESS(
                     f"{entry['source']}: indexed {entry['chunks']} chunks"
