@@ -119,8 +119,7 @@ class TestConsumer(AsyncWebsocketConsumer):
         await self.accept()
 
         self.provider = None
-        # Built per connection, not at import: it carries today's date, and a
-        # module-level constant would freeze whichever day the worker booted on.
+        # Built per connection, not at import: it carries today's date, and a  module-level constant would freeze whichever day the worker booted on.
         self.system_prompt = build_system_prompt()
         self.messages = [{"role": "system", "content": self.system_prompt}]
 

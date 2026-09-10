@@ -263,6 +263,14 @@ def test_lookup_city_lists_its_airports(airports):
 
 
 @pytest.mark.django_db
+def test_lookup_airplanes_counts_seats_in_one_query(airplane, django_assert_num_queries):
+    with django_assert_num_queries(1):
+        result = lookup_reference(entity="airplane", query="Airbus")
+
+    assert result["results"][0]["seats"] == 2
+
+
+@pytest.mark.django_db
 def test_unknown_entity_is_an_error(airports):
     assert "error" in lookup_reference(entity="spaceport", query="KBP")
 

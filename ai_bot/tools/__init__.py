@@ -22,7 +22,7 @@ from ai_bot.tools.common import MAX_LIMIT
 from ai_bot.tools.contact_tools import get_contacts
 from ai_bot.tools.flight_tools import get_flight_seats, search_flights
 from ai_bot.tools.knowledge_tools import search_knowledge_base
-from ai_bot.tools.reference_tools import ENTITIES, lookup_reference
+from ai_bot.tools.reference_tools import lookup_reference
 from ai_bot.tools.weather_tools import get_weather
 
 logger = logging.getLogger(__name__)
@@ -164,7 +164,7 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "entity": {
                         "type": "string",
-                        "enum": sorted(ENTITIES),
+                        "enum": ["airline", "airplane", "airport", "city", "country"],
                         "description": "Which reference table to search.",
                     },
                     "query": {
@@ -259,7 +259,7 @@ TOOL_SCHEMAS = [
 ]
 
 # name -> (function, needs_user)
-TOOL_REGISTRY = {
+TOOL_REGISTRY  = {
     "search_flights": (search_flights, False),
     "get_flight_seats": (get_flight_seats, False),
     "get_my_bookings": (get_my_bookings, True),

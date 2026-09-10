@@ -40,7 +40,7 @@ def _flatten(block) -> list[str]:
     """A block is either text or a mapping of named sub-blocks (tool_rules)."""
     if isinstance(block, str):
         return [block.strip()]
-    if isinstance(block, dict): 
+    if isinstance(block, dict):
         return [part.strip() for part in block.values() if isinstance(part, str)]
     return []
 

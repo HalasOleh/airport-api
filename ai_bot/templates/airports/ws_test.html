@@ -115,6 +115,10 @@
             log.scrollTop = log.scrollHeight;
         }
 
+        function plainTextReply(reply) {
+            return reply.replaceAll("**", "").replaceAll("`", "");
+        }
+
         // --- requests ------------------------------------------------------
 
         function getCsrfToken() {
@@ -201,8 +205,10 @@
                     writeLog(`Error: ${data.error}`);
                     providerSelected = false;
                     setProviderEnabled(true);
+                } else if (data.reply) {
+                    writeLog(`Reply: ${plainTextReply(data.reply)}`);
                 } else {
-                    writeLog(`Reply: ${event.data}`);
+                    writeLog(`Reply: ${JSON.stringify(data)}`);
                 }
             };
 
