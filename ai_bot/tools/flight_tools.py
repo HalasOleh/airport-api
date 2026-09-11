@@ -110,8 +110,8 @@ def _serialise_flight(flight: Flight, seat_class: str | None) -> dict:
         "flight_id": flight.pk,
         "from": {"code": flight.from_airport.code, "city": flight.from_airport.city.name},
         "to": {"code": flight.to_airport.code, "city": flight.to_airport.city.name},
-        "departure": flight.departure.isoformat(),
-        "arrival": flight.arrival.isoformat(),
+        "departure": timezone.localtime(flight.departure).isoformat(),
+        "arrival": timezone.localtime(flight.arrival).isoformat(),
         "status": flight.status,
         "airplane": flight.airplane.model if flight.airplane else None,
         # base_price 0 means no fare was ever set; Ticket.clean() refuses to
@@ -173,7 +173,9 @@ def get_flight_seats(flight_id=None, seat_class=None) -> dict:
         return error
 
     try:
-        flight = Flight.objects.select_related("airplane").get(pk=flight_id)
+        flight = Flight.objects.select_related(
+            "airplane", "from_airport__city", "to_airport__city"
+        ).get(pk=flight_id)
     except (Flight.DoesNotExist, TypeError, ValueError):
         return {
             "error": (
@@ -184,7 +186,16 @@ def get_flight_seats(flight_id=None, seat_class=None) -> dict:
 
     if flight.airplane_id is None:
         return {
-            "flight_id": flight.pk,
+            "from": {
+                "code": flight.from_airport.code,
+                "city": flight.from_airport.city.name,
+            },
+            "to": {
+                "code": flight.to_airport.code,
+                "city": flight.to_airport.city.name,
+            },
+            "departure": timezone.localtime(flight.departure).isoformat(),
+            "arrival": timezone.localtime(flight.arrival).isoformat(),
             "free_seats": [],
             "detail": "This flight has no airplane assigned, so it has no seats.",
         }
@@ -208,7 +219,16 @@ def get_flight_seats(flight_id=None, seat_class=None) -> dict:
     ]
 
     return {
-        "flight_id": flight.pk,
+        "from": {
+            "code": flight.from_airport.code,
+            "city": flight.from_airport.city.name,
+        },
+        "to": {
+            "code": flight.to_airport.code,
+            "city": flight.to_airport.city.name,
+        },
+        "departure": timezone.localtime(flight.departure).isoformat(),
+        "arrival": timezone.localtime(flight.arrival).isoformat(),
         "seat_numbering": SEAT_NUMBERING_NOTE,
         "free_seat_count": len(free),
         "free_seats": free[:MAX_SEATS_LISTED],

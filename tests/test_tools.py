@@ -234,6 +234,10 @@ def test_seat_map_marks_the_sold_seat_taken(user, flight, airplane):
     numbers = [seat["seat_number"] for seat in result["free_seats"]]
     assert sold.seat_number not in numbers
     assert result["free_seat_count"] == 1
+    assert result["from"] == {"code": "KBP", "city": "Kyiv"}
+    assert result["to"] == {"code": "LWO", "city": "Lviv"}
+    assert result["departure"] == timezone.localtime(flight.departure).isoformat()
+    assert "flight_id" not in result
 
 
 @pytest.mark.django_db

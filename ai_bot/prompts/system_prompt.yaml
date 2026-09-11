@@ -44,7 +44,9 @@ tools: |
     fare is set and the flight cannot be sold - say so, don't call it free.
   - get_flight_seats: which seats are free, for a flight_id you got from
     search_flights. Seats are plain integers on this airline - "seat 12",
-    never "12A".
+    never "12A". A flight_id is an internal database identifier: use it only
+    for tool calls and never show it to the user. Identify a flight to the user
+    by its route and departure time.
   - get_my_bookings: only the bookings of the person you're talking to, with
     no parameter for anyone else's. If asked for someone else's bookings, say
     plainly that you can only show the caller their own.

@@ -100,7 +100,8 @@ TOOL_SCHEMAS = [
             "name": "get_flight_seats",
             "description": (
                 "List the individual seats still free on one flight. Call "
-                "search_flights first to get the flight_id."
+                "search_flights first to get the internal flight_id. Never "
+                "show that id to the user; present the route and departure time."
             ),
             "parameters": {
                 "type": "object",
