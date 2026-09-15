@@ -258,13 +258,7 @@ class TestConsumer(AsyncWebsocketConsumer):
         return message.content
 
     def gemini_contents(self):
-        """Replay the stored history as Gemini Content objects.
 
-        Only the user/assistant text is carried over. Tool traffic from previous
-        turns is left behind - it is stored in the OpenAI shape, and the text
-        answer that followed it already contains what the next turn needs.
-        Within a single reply, tool calls and their responses are kept intact.
-        """
         contents = []
         for message in self.messages:
             role = message.get("role")

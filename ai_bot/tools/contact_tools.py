@@ -46,3 +46,4 @@ def get_contacts(department=None) -> dict:
         "detail": f"There is no department named {department!r}. These exist:",
         "departments": _all_departments(phone_book),
     }
+ 
