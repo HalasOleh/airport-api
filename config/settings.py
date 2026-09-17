@@ -225,12 +225,36 @@ BASE_URL = os.getenv("BASE_URL")
 
 ASGI_APPLICATION = "config.asgi.application"
 
-# Channels configuration
+# Redis is shared by the Channels layer and the chat context cache.
+# In Docker, "redis" is the service name from docker-compose.yml.
+# On Render, REDIS_URL will contain the address of the managed Redis instance.
+REDIS_URL = os.getenv(
+    "REDIS_URL",
+    "redis://redis:6379/0",
+)
+
+CHAT_CONTEXT_CACHE_TIMEOUT = int(
+    os.getenv("CHAT_CONTEXT_CACHE_TIMEOUT", 60 * 60)
+)
+
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "airport-default",
+    },
+    "chat_context": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": REDIS_URL,
+        "KEY_PREFIX": "airport-chat",
+        "TIMEOUT": CHAT_CONTEXT_CACHE_TIMEOUT,
+    },
+}
+
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [("redis", 6379)],
+            "hosts": [REDIS_URL],
         },
     },
 }

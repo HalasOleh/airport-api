@@ -11,6 +11,8 @@ import os
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
+from django.core.cache import caches
+
 from google import genai
 from google.genai import types as genai_types
 from openai import AsyncOpenAI
@@ -18,6 +20,8 @@ from openai import AsyncOpenAI
 from ai_bot.models import ChatDialog, ChatMessage
 from ai_bot.prompt import build_system_prompt
 from ai_bot.tools import TOOL_SCHEMAS, call_tool, gemini_tools
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +37,40 @@ MAX_TOOL_ROUNDS = 5
 # trim_history(), which will not cut a tool result away from its tool call.
 MAX_HISTORY_MESSAGES = 40
 
+cache = caches["chat_context"]
+
+
+def dialog_messages_cache_key(dialog_id: int) -> str:
+    """Return a unique Redis key for one dialog's message history."""
+    return f"chat:dialog:{dialog_id}:messages"
+    
+
+async def get_cached_dialog_messages(dialog_id: int):
+    """Return cached messages or None when the cache is empty or unavailable."""
+    key = dialog_messages_cache_key(dialog_id)
+
+    try:
+        return await cache.aget(key)
+    except Exception:
+        logger.exception(
+            "Could not read dialog %s from the Redis cache",
+            dialog_id,
+        )
+        return None
+
+
+async def set_cached_dialog_messages(dialog_id: int, messages: list[dict]):
+    """Store dialog messages without allowing Redis errors to break the chat."""
+    key = dialog_messages_cache_key(dialog_id)
+
+    try:
+        await cache.aset(key, messages)
+    except Exception:
+        logger.exception(
+            "Could not cache dialog %s messages",
+            dialog_id,
+        )
+
 
 @database_sync_to_async
 def get_dialog_for_connection(user, dialog_id=None):
@@ -46,7 +84,8 @@ def get_dialog_for_connection(user, dialog_id=None):
 
 
 @database_sync_to_async
-def load_dialog_messages(dialog_id):
+def load_dialog_messages_from_db(dialog_id: int) -> list[dict]:
+    """Load persistent dialog history from PostgreSQL."""
     return list(
         ChatMessage.objects.filter(dialog_id=dialog_id)
         .order_by("created_at")
@@ -54,8 +93,35 @@ def load_dialog_messages(dialog_id):
     )
 
 
+async def load_dialog_messages(dialog_id: int) -> list[dict]:
+    """Load dialog history from Redis, falling back to PostgreSQL."""
+    cached_messages = await get_cached_dialog_messages(dialog_id)
+
+    if isinstance(cached_messages, list):
+        logger.debug(
+            "Loaded dialog %s messages from Redis",
+            dialog_id,
+        )
+        return cached_messages
+
+    messages = await load_dialog_messages_from_db(dialog_id)
+
+    await set_cached_dialog_messages(
+        dialog_id,
+        messages,
+    )
+
+    logger.debug(
+        "Loaded dialog %s messages from PostgreSQL",
+        dialog_id,
+    )
+
+    return messages
+
+
 @database_sync_to_async
-def save_chat_message(dialog_id, role, content):
+def save_chat_message_to_db(dialog_id: int, role: str, content: str):
+    """Persist one message in PostgreSQL."""
     if not dialog_id or not content:
         return None
 
@@ -64,6 +130,36 @@ def save_chat_message(dialog_id, role, content):
         role=role,
         content=content,
     )
+
+
+async def save_chat_message(dialog_id: int, role: str, content: str):
+    """Persist a message and update an existing Redis context."""
+    saved_message = await save_chat_message_to_db(
+        dialog_id,
+        role,
+        content,
+    )
+
+    if saved_message is None:
+        return None
+
+    cached_messages = await get_cached_dialog_messages(dialog_id)
+
+    if isinstance(cached_messages, list):
+        updated_messages = [
+            *cached_messages,
+            {
+                "role": str(role),
+                "content": content,
+            },
+        ]
+
+        await set_cached_dialog_messages(
+            dialog_id,
+            updated_messages,
+        )
+
+    return saved_message
 
 
 def parse_tool_arguments(raw):
