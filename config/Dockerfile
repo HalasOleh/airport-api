@@ -32,4 +32,4 @@ COPY . .
 EXPOSE 8000
 
 # Use Daphne ASGI server for WebSocket support
-CMD ["daphne", "-b", "0.0.0.0", "-p", "8000", "config.asgi:application"]
+CMD ["sh", "-c", "daphne -b 0.0.0.0 -p ${PORT:-8000} config.asgi:application"]
