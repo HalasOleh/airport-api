@@ -12,7 +12,7 @@ from airports.models import (
     SeatType,
     City,
 )
-from airports.permissions import IsAdminAllORIsAuthenticatedReadOnly
+from config.permissions import IsAdminAllORIsAuthenticatedReadOnly
 from airports.serializer import (
     AirplaneListSerializer,
     CitySerializer,

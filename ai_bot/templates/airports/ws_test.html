@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>WebSocket Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 40px;
+            max-width: 760px;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 220px;
+            margin-top: 16px;
+            padding: 12px;
+            font-family: Consolas, monospace;
+        }
+
+        input {
+            padding: 10px;
+        }
+
+        button {
+            padding: 10px 14px;
+        }
+    </style>
+</head>
+<body>
+    <h1>WebSocket Test</h1>
+
+    {% csrf_token %}
+
+    <p style="color:#555;">
+        Authenticated with your Django session &mdash; log in at
+        <a href="/admin/">/admin/</a> first if requests come back as 403.
+    </p>
+
+    <div style="margin-bottom:12px;">
+        <label>Dialog ID:</label>
+        <input id="dialogId" style="width:120px; margin-left:8px;" placeholder="1" />
+        <button id="createDialog">Create dialog</button>
+        <button id="connect">Connect</button>
+    </div>
+
+    <div style="margin-bottom:12px;">
+        <label>Provider:</label>
+        <button class="provider-btn" data-provider="gemini">gemini</button>
+        <button class="provider-btn" data-provider="openai">openai</button>
+        <span style="margin-left:12px;">or type:</span>
+        <input id="provider" value="" style="width:120px; margin-left:8px;" placeholder="custom provider" />
+        <button id="setProvider">Set provider</button>
+    </div>
+
+    <input id="message" value="Tell me about airports" style="width:70%;">
+    <button id="send">Send message</button>
+
+    <textarea id="log" readonly></textarea>
+
+    <script>
+        const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+        let socket = null;
+
+        const log = document.getElementById("log");
+        const dialogIdInput = document.getElementById("dialogId");
+        const messageInput = document.getElementById("message");
+        const providerInput = document.getElementById("provider");
+        const setProviderBtn = document.getElementById("setProvider");
+        const providerButtons = document.querySelectorAll(".provider-btn");
+        const connectBtn = document.getElementById("connect");
+        const createDialogBtn = document.getElementById("createDialog");
+        let providerSelected = false;
+
+        function writeLog(message) {
+            log.value += `${message}\n`;
+            log.scrollTop = log.scrollHeight;
+        }
+
+        function getCsrfToken() {
+            const field = document.querySelector("[name=csrfmiddlewaretoken]");
+            return field ? field.value : "";
+        }
+
+        async function createDialog() {
+            const response = await fetch("/api/chat/dialogs/", {
+                method: "POST",
+                credentials: "same-origin",
+                headers: {
+                    "X-CSRFToken": getCsrfToken(),
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ title: "WebSocket test chat" }),
+            });
+
+            const data = await response.json();
+            if (!response.ok) {
+                writeLog(`Create dialog failed: ${JSON.stringify(data)}`);
+                return;
+            }
+
+            dialogIdInput.value = data.id;
+            writeLog(`Dialog created: ${data.id}`);
+        }
+
+        function connectSocket() {
+            const dialogId = dialogIdInput.value.trim();
+            if (!dialogId) {
+                writeLog("Create a dialog or enter a dialog id first.");
+                return;
+            }
+
+            // The session cookie is sent with the handshake; no token in the URL.
+            socket = new WebSocket(
+                `${protocol}://${window.location.host}/ws/chat/${dialogId}/`
+            );
+
+            socket.onopen = () => {
+                writeLog("Connected");
+                writeLog('Step 1: choose provider and click "Set provider"');
+            };
+
+            socket.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.history) {
+                    writeLog(`History loaded: ${data.history.length} messages`);
+                } else if (data.status) {
+                    writeLog(`Status: ${data.status}`);
+                    providerSelected = true;
+                    providerInput.disabled = true;
+                    setProviderBtn.disabled = true;
+                    providerButtons.forEach(btn => btn.disabled = true);
+                    writeLog('Now send messages (Step 2) using the "Send message" button');
+                } else if (data.error) {
+                    writeLog(`Error: ${data.error}`);
+                    providerSelected = false;
+                    providerInput.disabled = false;
+                    setProviderBtn.disabled = false;
+                    providerButtons.forEach(btn => btn.disabled = false);
+                } else {
+                    writeLog(`Reply: ${event.data}`);
+                }
+            };
+
+            socket.onerror = (e) => {
+                writeLog("WebSocket error");
+                console.error(e);
+            };
+
+            socket.onclose = () => {
+                writeLog("Disconnected");
+                providerSelected = false;
+                providerInput.disabled = false;
+                setProviderBtn.disabled = false;
+                providerButtons.forEach(btn => btn.disabled = false);
+            };
+        }
+
+        function sendProvider(provider) {
+            if (!provider) return;
+            if (!socket || socket.readyState !== WebSocket.OPEN) {
+                writeLog("Connect WebSocket first.");
+                return;
+            }
+            socket.send(JSON.stringify({ provider }));
+            writeLog(`Trying provider: ${provider}`);
+        }
+
+        createDialogBtn.addEventListener("click", createDialog);
+        connectBtn.addEventListener("click", connectSocket);
+
+        providerButtons.forEach(button => {
+            button.addEventListener("click", () => sendProvider(button.dataset.provider));
+        });
+
+        setProviderBtn.addEventListener("click", () => {
+            const provider = providerInput.value.trim();
+            if (!provider) return;
+            sendProvider(provider);
+        });
+
+        document.getElementById("send").addEventListener("click", () => {
+            const msg = messageInput.value;
+            if (!socket || socket.readyState !== WebSocket.OPEN) {
+                writeLog("Connect WebSocket first.");
+                return;
+            }
+            if (!providerSelected) {
+                writeLog('Please choose a valid provider first.');
+                return;
+            }
+            socket.send(JSON.stringify({ message: msg }));
+            writeLog(`Sent: ${msg}`);
+        });
+    </script>
+</body>
+</html>
