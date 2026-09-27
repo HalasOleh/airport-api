@@ -7,7 +7,29 @@ from airports.models import Seat, Flight
 from rest_framework import serializers
 
 
-class TicketSerializer(serializers.ModelSerializer):
+class SeatBelongsToFlightMixin:
+    """Same rule as Ticket.clean(), restated for the API layer.
+
+    Ticket.save() is the guarantee - it cannot be bypassed. This exists so a
+    bad request comes back as 400 with a field name attached, instead of a
+    model-level ValidationError surfacing as a 500.
+    """
+
+    def validate(self, attrs):
+        seat = attrs.get("seat")
+        flight = attrs.get("flight")
+        if seat and flight:
+            if flight.airplane_id is None:
+                raise serializers.ValidationError(
+                    {"flight": "This flight has no airplane assigned, so it has no seats to sell."}
+                )
+            if seat.airplane_id != flight.airplane_id:
+                raise serializers.ValidationError(
+                    {"seat": "This seat does not belong to the flight's airplane."}
+                )
+        return attrs
+
+class TicketSerializer(SeatBelongsToFlightMixin, serializers.ModelSerializer):
     seat = serializers.PrimaryKeyRelatedField(
         queryset=Seat.objects.all(),
         required=False,
@@ -20,7 +42,8 @@ class TicketSerializer(serializers.ModelSerializer):
     class Meta:
         model = Ticket
         fields = ("id", "status", "seat", "flight", "price")
-        read_only_fields = ("id", "status")
+        # price is computed from Flight.base_price; never taken from input.
+        read_only_fields = ("id", "status", "price")
         validators = [
             UniqueTogetherValidator(
                 queryset=Ticket.objects.filter(
@@ -35,14 +58,15 @@ class TicketListSerializer(TicketSerializer):
     flight = serializers.StringRelatedField()
 
 
-class OrderTicketSerializer(serializers.ModelSerializer):
+class OrderTicketSerializer(SeatBelongsToFlightMixin, serializers.ModelSerializer):
     seat = serializers.PrimaryKeyRelatedField(queryset=Seat.objects.all())
     flight = serializers.PrimaryKeyRelatedField(queryset=Flight.objects.all())
 
     class Meta:
         model = Ticket
         fields = ("id", "status", "seat", "flight", "price")
-        read_only_fields = ("id", "status")
+        # price is computed from Flight.base_price; never taken from input.
+        read_only_fields = ("id", "status", "price")
         validators = [
             UniqueTogetherValidator(
                 queryset=Ticket.objects.filter(

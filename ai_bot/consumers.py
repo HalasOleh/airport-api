@@ -1,304 +1,75 @@
-import ast
-import asyncio
+"""WebSocket chat consumer.
+
+The consumer owns three things: the socket, the conversation history, and the
+tool-calling loop. It owns no domain knowledge - which tool answers a question,
+and with what arguments, is decided by the model and executed by
+ai_bot.tools.call_tool. There is no keyword matching over the user's text here.
+"""
 import json
 import logging
 import os
 
-import requests
-from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
+from channels.generic.websocket import AsyncWebsocketConsumer
+from django.core.cache import caches
+
 from google import genai
+from google.genai import types as genai_types
 from openai import AsyncOpenAI
 
-from airports.models import Flight
 from ai_bot.models import ChatDialog, ChatMessage
+from ai_bot.prompt import build_system_prompt
+from ai_bot.tools import TOOL_SCHEMAS, call_tool, gemini_tools
 
-from pathlib import Path
 
-KNOWLEDGE_BASE_DIR = Path(__file__).resolve().parent / "knowledge_base"
 
 logger = logging.getLogger(__name__)
 
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4-nano")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 
-def load_documents():
-    docs = []
-    docs_folder = KNOWLEDGE_BASE_DIR
+# The model may need several passes: look up an airport code, then search
+# flights with it, then read the seat map. The ceiling is what stops a model
+# that keeps calling the same tool from looping forever.
+MAX_TOOL_ROUNDS = 5
 
-    try:
-        if not os.path.exists(docs_folder):
-            print(f"Warning: {docs_folder} does not exist")
-            return docs
+# Rough cap on how much conversation goes back to the model. Trimming is done by
+# trim_history(), which will not cut a tool result away from its tool call.
+MAX_HISTORY_MESSAGES = 40
 
-        for filename in os.listdir(docs_folder):
-            if filename.endswith('.txt'):
-                try:
-                    with open(os.path.join(docs_folder, filename), 'r', encoding='utf-8') as f:
-                        content = f.read()
-                        docs.append({
-                            'filename': filename,
-                            'content': content
-                        })
-                except Exception as e:
-                    print(f"Error loading {filename}: {e}")
-
-        print(f"Loaded {len(docs)} documents")
-    except Exception as e:
-        print(f"Error loading documents: {e}")
-
-    return docs
+cache = caches["chat_context"]
 
 
-def search_documents(documents, query): # Improved keyword search with scoring
-    query_lower = query.lower()
-    query_words = [word for word in query_lower.split() if len(word) > 2]  # Ignore short words
+def dialog_messages_cache_key(dialog_id: int) -> str:
+    """Return a unique Redis key for one dialog's message history."""
+    return f"chat:dialog:{dialog_id}:messages"
+    
 
-    if not query_words:
-        return ""
-
-    scored_docs = []
-
-    for doc in documents:
-        content_lower = doc['content'].lower()
-        score = 0
-
-        # Count words in the document
-        for word in query_words:
-            if word in content_lower:
-                # Give higher score if word appears multiple times
-                score += content_lower.count(word)
-
-        if score > 0:
-            scored_docs.append((score, doc))
-
-    # Sort by score (highest first) and take top 2 most relevant
-    scored_docs.sort(reverse=True, key=lambda x: x[0])
-    relevant = [doc['content'] for score, doc in scored_docs[:2]]
-
-    return "\n\n".join(relevant) if relevant else ""
-
-PHONE_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "get_phone_number",
-        "description": "Get the contact details of an airport department.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "department": {
-                    "type": "string",
-                    "description": (
-                        "Department name, for example Customer Support, "
-                        "Sales Department, Technical Support, Emergency Contact."
-                    ),
-                }
-            },
-            "required": ["department"],
-            "additionalProperties": False,
-        },
-    },
-}
-
-PARKING_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "get_place",
-        "description": "Get the parking place for a given airport.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "airport": {
-                    "type": "string",
-                    "description": "Airport name, for example Heathrow, JFK, Boryspil.",
-                }
-            },
-            "required": ["airport"],
-            "additionalProperties": False,
-        },
-    },
-}
-
-WEATHER_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "get_weather",
-        "description": "Get the current weather for a given city.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "city": {
-                    "type": "string",
-                    "description": "City name, for example Kyiv, London, New York.",
-                }
-            },
-            "required": ["city"],
-            "additionalProperties": False,
-        },
-    },
-}
-
-FLIGHT_STATUS_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "get_flight_status",
-        "description": "Get flight status and details by searching for flights between airports or by route.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "from_airport": {
-                    "type": "string",
-                    "description": "Departure airport code (3 letters, e.g., KBP, JFK, LWO) or city name.",
-                },
-                "to_airport": {
-                    "type": "string",
-                    "description": "Arrival airport code (3 letters) or city name.",
-                }
-            },
-            "required": ["from_airport", "to_airport"],
-            "additionalProperties": False,
-        },
-    },
-}
-
-
-def get_place(airport: str) -> dict:
-    parking_file = KNOWLEDGE_BASE_DIR / "parking_info.txt"
-    try:
-        with open(parking_file, "r", encoding="utf-8") as f:
-            parking_text = f.read()
-    except FileNotFoundError:
-        return {
-            "airport": airport,
-            "place": "Parking information file not found",
-            "condition": "unknown",
-        }
-    except Exception as exc:
-        return {
-            "airport": airport,
-            "place": f"Error reading parking info: {exc}",
-            "condition": "unknown",
-        }
-
-    airport_query = (airport or "").strip().lower()
-    for block in [block.strip() for block in parking_text.split("\n\n") if block.strip()]:
-        if airport_query and airport_query in block.lower():
-            return {
-                "airport": airport,
-                "place": block,
-                "condition": "available",
-                "source": "ai_bot/knowledge_base/parking_info.txt",
-            }
-
-    return {
-        "airport": airport,
-        "place": "No parking information found for this airport",
-        "condition": "unknown",
-        "source": "ai_bot/knowledge_base/parking_info.txt",
-    }
-
-def load_phone_book() -> dict:
-    # The file stores a Python dict literal: `company_contact_info = {...}`
-    phone_file = KNOWLEDGE_BASE_DIR / "phone_numbers.txt"
-    raw = phone_file.read_text(encoding="utf-8")
-    _, _, literal = raw.partition("=")
-    return ast.literal_eval(literal.strip())
-
-
-def get_phone_number(department: str) -> dict:
-    try:
-        phone_book = load_phone_book()
-    except FileNotFoundError:
-        return {
-            "department": department,
-            "phone_number": "Phone numbers file not found",
-            "condition": "unknown",
-        }
-    except (ValueError, SyntaxError) as exc:
-        return {
-            "department": department,
-            "phone_number": f"Phone numbers file is malformed: {exc}",
-            "condition": "unknown",
-        }
-
-    query = (department or "").strip().lower()
-    for name, info in phone_book.items():
-        if query and (query in name.lower() or name.lower() in query):
-            return {
-                "department": name,
-                "contact_data": info,
-                "condition": "available",
-            }
-
-    return {
-        "department": department,
-        "phone_number": "No phone number found for this department",
-        "available_departments": list(phone_book),
-        "condition": "unknown",
-    }
-
-def get_weather(city: str) -> dict:
-    api_key = os.getenv("WEATHER_API_KEY", "")
-    if not api_key:
-        return {
-            "error": "WEATHER_API_KEY is not set",
-            "city": city,
-        }
+async def get_cached_dialog_messages(dialog_id: int):
+    """Return cached messages or None when the cache is empty or unavailable."""
+    key = dialog_messages_cache_key(dialog_id)
 
     try:
-        response = requests.get(
-            f"http://api.weatherapi.com/v1/current.json?key={api_key}&q={city}&aqi=yes",
-            timeout=20,
+        return await cache.aget(key)
+    except Exception:
+        logger.exception(
+            "Could not read dialog %s from the Redis cache",
+            dialog_id,
         )
-        response.raise_for_status()
-        data = response.json()
-
-        return {
-            "city": data["location"]["name"],
-            "temperature_c": data["current"]["temp_c"],
-            "condition": data["current"]["condition"]["text"],
-        }
-    except Exception as e:
-        return {
-            "error": f"Failed to get weather: {str(e)}",
-            "city": city,
-        }
+        return None
 
 
-@database_sync_to_async
-def get_flight_status(from_airport: str, to_airport: str) -> dict: #Query database for flights between airports"
+async def set_cached_dialog_messages(dialog_id: int, messages: list[dict]):
+    """Store dialog messages without allowing Redis errors to break the chat."""
+    key = dialog_messages_cache_key(dialog_id)
+
     try:
-        # Search by airport code or city name
-        flights = Flight.objects.filter(
-            from_airport__code__icontains=from_airport.upper()
-        ).filter(
-            to_airport__code__icontains=to_airport.upper()
+        await cache.aset(key, messages)
+    except Exception:
+        logger.exception(
+            "Could not cache dialog %s messages",
+            dialog_id,
         )
-
-        if not flights:
-            return {
-                "message": f"No flights found from {from_airport} to {to_airport}",
-                "flights": []
-            }
-
-        flight_list = []
-        for flight in flights:
-            flight_list.append({
-                "from": str(flight.from_airport),
-                "to": str(flight.to_airport),
-                "departure": flight.departure.strftime("%Y-%m-%d %H:%M"),
-                "arrival": flight.arrival.strftime("%Y-%m-%d %H:%M"),
-                "status": flight.status,
-                "airplane": str(flight.airplane) if flight.airplane else "Not assigned",
-            })
-
-        return {
-            "message": f"Found {len(flight_list)} flight(s)",
-            "flights": flight_list
-        }
-    except Exception as e:
-        return {
-            "error": f"Failed to get flight status: {str(e)}",
-            "flights": []
-        }
 
 
 @database_sync_to_async
@@ -313,7 +84,8 @@ def get_dialog_for_connection(user, dialog_id=None):
 
 
 @database_sync_to_async
-def load_dialog_messages(dialog_id):
+def load_dialog_messages_from_db(dialog_id: int) -> list[dict]:
+    """Load persistent dialog history from PostgreSQL."""
     return list(
         ChatMessage.objects.filter(dialog_id=dialog_id)
         .order_by("created_at")
@@ -321,8 +93,35 @@ def load_dialog_messages(dialog_id):
     )
 
 
+async def load_dialog_messages(dialog_id: int) -> list[dict]:
+    """Load dialog history from Redis, falling back to PostgreSQL."""
+    cached_messages = await get_cached_dialog_messages(dialog_id)
+
+    if isinstance(cached_messages, list):
+        logger.debug(
+            "Loaded dialog %s messages from Redis",
+            dialog_id,
+        )
+        return cached_messages
+
+    messages = await load_dialog_messages_from_db(dialog_id)
+
+    await set_cached_dialog_messages(
+        dialog_id,
+        messages,
+    )
+
+    logger.debug(
+        "Loaded dialog %s messages from PostgreSQL",
+        dialog_id,
+    )
+
+    return messages
+
+
 @database_sync_to_async
-def save_chat_message(dialog_id, role, content):
+def save_chat_message_to_db(dialog_id: int, role: str, content: str):
+    """Persist one message in PostgreSQL."""
     if not dialog_id or not content:
         return None
 
@@ -331,14 +130,72 @@ def save_chat_message(dialog_id, role, content):
         role=role,
         content=content,
     )
-        
 
-FUNCTIONS = {
-    "get_place": get_place,
-    "get_weather": get_weather,
-    "get_flight_status": get_flight_status,
-    "get_phone_number": get_phone_number,
-}
+
+async def save_chat_message(dialog_id: int, role: str, content: str):
+    """Persist a message and update an existing Redis context."""
+    saved_message = await save_chat_message_to_db(
+        dialog_id,
+        role,
+        content,
+    )
+
+    if saved_message is None:
+        return None
+
+    cached_messages = await get_cached_dialog_messages(dialog_id)
+
+    if isinstance(cached_messages, list):
+        updated_messages = [
+            *cached_messages,
+            {
+                "role": str(role),
+                "content": content,
+            },
+        ]
+
+        await set_cached_dialog_messages(
+            dialog_id,
+            updated_messages,
+        )
+
+    return saved_message
+
+
+def parse_tool_arguments(raw):
+    """Tool arguments arrive as a JSON string the model wrote. Returns None if
+    it is not a usable object, which the caller reports back as a tool error."""
+    try:
+        arguments = json.loads(raw or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return arguments if isinstance(arguments, dict) else None
+
+
+def trim_history(messages, limit=MAX_HISTORY_MESSAGES):
+    """Drop the oldest turns, keeping tool calls and their results together.
+
+    A naive "last N messages" cut can leave a tool result whose assistant
+    message with the matching tool_call id was trimmed away. The API rejects
+    that outright, so the window is advanced to the next user message, which is
+    always a safe boundary.
+    """
+    if len(messages) <= limit:
+        return messages
+
+    system, rest = messages[:1], messages[1:]
+    window = rest[-(limit - 1):]
+
+    start = 0
+    while start < len(window) and window[start].get("role") != "user":
+        start += 1
+
+    if start == len(window):
+        # The whole window is one long tool exchange. Cutting anywhere inside it
+        # would orphan something, so leave the history alone this round.
+        return messages
+
+    return system + window[start:]
 
 
 class TestConsumer(AsyncWebsocketConsumer):
@@ -358,24 +215,9 @@ class TestConsumer(AsyncWebsocketConsumer):
         await self.accept()
 
         self.provider = None
-        # Run synchronous file I/O in a thread to avoid blocking the event loop
-        self.documents = await asyncio.to_thread(load_documents)
-        # conversation memory lives here, for the life of this connection
-
-        self.messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are an airport assistant. "
-                    "Use available tools and document context to answer user questions. "
-                    "Available tools: "
-                    "- get_place: parking locations "
-                    "- get_phone_number: phone numbers "
-                    "- get_weather: current weather "
-                    "- get_flight_status: flight information between airports"
-                ),
-            }
-        ]
+        # Built per connection, not at import: it carries today's date, and a  module-level constant would freeze whichever day the worker booted on.
+        self.system_prompt = build_system_prompt()
+        self.messages = [{"role": "system", "content": self.system_prompt}]
 
         if self.dialog:
             saved_messages = await load_dialog_messages(self.dialog.id)
@@ -404,7 +246,7 @@ class TestConsumer(AsyncWebsocketConsumer):
                 self.provider = None
                 return
             self.provider = chosen
-            print(f"Client connected. Using {self.provider} as provider.")
+            logger.info("Client selected provider %s", self.provider)
             await self.send(text_data=json.dumps({"status": f"using {self.provider}"}))
             return
 
@@ -427,10 +269,10 @@ class TestConsumer(AsyncWebsocketConsumer):
             )
 
         try:
-            reply_text = await self.generate_reply(user_message)
+            reply_text = await self.generate_reply()
         except Exception:
-            # An upstream/model failure should surface as an error frame,
-            # not kill the socket and lose the conversation.
+            # An upstream/model failure should surface as an error frame, not
+            # kill the socket and lose the conversation.
             logger.exception("Failed to generate a reply via %s", self.provider)
             await self.send(text_data=json.dumps({"error": "Failed to generate a reply"}))
             return
@@ -443,84 +285,145 @@ class TestConsumer(AsyncWebsocketConsumer):
                 reply_text,
             )
 
-    async def generate_reply(self, user_message):
+    async def generate_reply(self):
         if self.provider == "gemini":
-            client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
-            response = await client.aio.models.generate_content(
-                model="gemini-3.6-flash",
-                contents=user_message,
-            )
-            reply_text = response.text
-            self.messages.append({"role": "assistant", "content": reply_text})
-            return reply_text
+            return await self.generate_reply_gemini()
+        return await self.generate_reply_openai()
 
-        else:
-            # Run synchronous CPU-bound search in a thread
-            context = await asyncio.to_thread(search_documents, self.documents, user_message)
-            logger.info(f"Context: {context}")
-            self.messages[0]["content"] = f"""You are an airport assistant.
+    async def run_tool_call(self, name, raw_arguments):
+        """Execute one tool call and return its result dict.
 
-            Available information:
-            {context}
+        call_tool is synchronous and touches the ORM, files and HTTP, so it goes
+        to a worker thread - on the event loop it would stall every other
+        WebSocket connection on this worker.
 
-            Use the tools when appropriate."""
+        self.user comes from the authenticated scope and is passed positionally.
+        The model never supplies it: no tool schema declares a user parameter.
+        """
+        arguments = parse_tool_arguments(raw_arguments)
+        if arguments is None:
+            logger.warning("Tool %s: unreadable arguments %r", name, raw_arguments)
+            return {"error": f"Could not read the arguments for {name} as JSON."}
 
-            client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+        logger.info("Tool call %s(%s)", name, arguments)
+        return await database_sync_to_async(call_tool)(name, arguments, self.user)
 
+    async def generate_reply_openai(self):
+        client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+        for _ in range(MAX_TOOL_ROUNDS):
+            self.messages = trim_history(self.messages)
             response = await client.chat.completions.create(
-                model="gpt-5.4-nano",
+                model=OPENAI_MODEL,
                 messages=self.messages,
-                tools=[PARKING_TOOL, WEATHER_TOOL, FLIGHT_STATUS_TOOL, PHONE_TOOL],
+                # Passed on every round, not just the first: without it the model
+                # cannot act on what a tool just returned.
+                tools=TOOL_SCHEMAS,
             )
 
             message = response.choices[0].message
-            reply_text = message.content
-            self.messages.append(message)
+            # Normalised to a plain dict so the history stays JSON-serialisable
+            # and uniform with the messages loaded from the database.
+            self.messages.append(message.model_dump(exclude_none=True))
 
-            if message.tool_calls:
-                for tool_call in message.tool_calls:
-                    function_response = await self.call_tool(tool_call)
-                    self.messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": json.dumps(function_response),
-                    })
+            if not message.tool_calls:
+                return message.content
 
-                second_response = await client.chat.completions.create(
-                    model="gpt-5.4-nano",
-                    messages=self.messages,
+            # A single response can ask for several tools at once. Each gets its
+            # own result message carrying its own tool_call_id.
+            for tool_call in message.tool_calls:
+                result = await self.run_tool_call(
+                    tool_call.function.name, tool_call.function.arguments
                 )
-                reply_text = second_response.choices[0].message.content
-                self.messages.append(second_response.choices[0].message)
+                self.messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": json.dumps(result, ensure_ascii=False, default=str),
+                })
 
-            return reply_text
+        # Out of rounds. Ask once more without tools so the model has to produce
+        # an answer instead of reaching for another call.
+        logger.warning("Tool loop hit %s rounds; forcing a text answer", MAX_TOOL_ROUNDS)
+        self.messages = trim_history(self.messages)
+        response = await client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=self.messages,
+        )
+        message = response.choices[0].message
+        self.messages.append(message.model_dump(exclude_none=True))
+        return message.content
 
-    async def call_tool(self, tool_call):
-        # Every failure here must come back as a tool result, otherwise the
-        # conversation is left with an unanswered tool_call id.
-        function_name = tool_call.function.name
-        function = FUNCTIONS.get(function_name)
-        if function is None:
-            return {"error": f"unknown function {function_name}"}
+    def gemini_contents(self):
 
-        try:
-            function_args = json.loads(tool_call.function.arguments or "{}")
-        except json.JSONDecodeError:
-            return {"error": f"invalid arguments for {function_name}"}
+        contents = []
+        for message in self.messages:
+            role = message.get("role")
+            content = message.get("content")
+            if role not in ("user", "assistant") or not content:
+                continue
+            contents.append(
+                genai_types.Content(
+                    role="user" if role == "user" else "model",
+                    parts=[genai_types.Part.from_text(text=content)],
+                )
+            )
+        return contents
 
-        logger.info("Tool call %s(%s)", function_name, function_args)
+    async def generate_reply_gemini(self):
+        client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+        config = genai_types.GenerateContentConfig(
+            system_instruction=self.system_prompt,
+            tools=[genai_types.Tool(function_declarations=gemini_tools())],
+            # The declarations are plain schemas, not Python callables, so the
+            # SDK must not try to invoke anything itself.
+            automatic_function_calling=genai_types.AutomaticFunctionCallingConfig(
+                disable=True
+            ),
+        )
 
-        try:
-            # get_flight_status is already awaitable (database_sync_to_async)
-            if function_name == "get_flight_status":
-                return await function(**function_args)
-            # Synchronous functions (file I/O, HTTP requests) go to a thread
-            return await asyncio.to_thread(function, **function_args)
-        except TypeError as exc:
-            return {"error": f"bad arguments for {function_name}: {exc}"}
-        except Exception as exc:
-            logger.exception("Tool %s failed", function_name)
-            return {"error": f"{function_name} failed: {exc}"}
+        contents = self.gemini_contents()
+
+        for _ in range(MAX_TOOL_ROUNDS):
+            response = await client.aio.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=contents,
+                config=config,
+            )
+
+            candidate = response.candidates[0] if response.candidates else None
+            if candidate is None or candidate.content is None:
+                return response.text
+
+            contents.append(candidate.content)
+
+            function_calls = response.function_calls or []
+            if not function_calls:
+                reply_text = response.text
+                self.messages.append({"role": "assistant", "content": reply_text})
+                return reply_text
+
+            parts = []
+            for function_call in function_calls:
+                logger.info("Tool call %s(%s)", function_call.name, function_call.args)
+                result = await database_sync_to_async(call_tool)(
+                    function_call.name, dict(function_call.args or {}), self.user
+                )
+                parts.append(
+                    genai_types.Part.from_function_response(
+                        name=function_call.name, response=result
+                    )
+                )
+            contents.append(genai_types.Content(role="user", parts=parts))
+
+        logger.warning("Gemini tool loop hit %s rounds; forcing a text answer", MAX_TOOL_ROUNDS)
+        response = await client.aio.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=contents,
+            config=genai_types.GenerateContentConfig(system_instruction=self.system_prompt),
+        )
+        reply_text = response.text
+        self.messages.append({"role": "assistant", "content": reply_text})
+        return reply_text
 
     async def disconnect(self, close_code):
         pass
