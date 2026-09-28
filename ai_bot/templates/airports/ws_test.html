@@ -37,6 +37,20 @@
         #who {
             color: #555;
         }
+
+        #checkoutLink {
+            display: inline-block;
+            margin-top: 14px;
+            padding: 10px 14px;
+            border-radius: 6px;
+            background: #635bff;
+            color: white;
+            text-decoration: none;
+        }
+
+        #checkoutLink.hidden {
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -83,6 +97,11 @@
     </div>
 
     <textarea id="log" readonly></textarea>
+    <div>
+        <a id="checkoutLink" class="hidden" target="_blank" rel="noopener noreferrer">
+            Open secure Stripe Checkout
+        </a>
+    </div>
 
     <script>
         // The JWT lives in an httpOnly cookie. This page cannot read it, cannot
@@ -109,6 +128,7 @@
         const providerInput = document.getElementById("provider");
         const setProviderBtn = document.getElementById("setProvider");
         const providerButtons = document.querySelectorAll(".provider-btn");
+        const checkoutLink = document.getElementById("checkoutLink");
 
         function writeLog(message) {
             log.value += `${message}\n`;
@@ -205,8 +225,22 @@
                     writeLog(`Error: ${data.error}`);
                     providerSelected = false;
                     setProviderEnabled(true);
-                } else if (data.reply) {
-                    writeLog(`Reply: ${plainTextReply(data.reply)}`);
+                } else if (data.reply || data.checkout_url) {
+                    if (data.reply) {
+                        writeLog(`Reply: ${plainTextReply(data.reply)}`);
+                    }
+                    if (data.checkout_url) {
+                        try {
+                            const checkoutUrl = new URL(data.checkout_url);
+                            if (checkoutUrl.protocol === "https:") {
+                                checkoutLink.href = checkoutUrl.href;
+                                checkoutLink.classList.remove("hidden");
+                                writeLog("Secure Stripe Checkout link is ready.");
+                            }
+                        } catch (error) {
+                            writeLog("The Checkout link returned by the server is invalid.");
+                        }
+                    }
                 } else {
                     writeLog(`Reply: ${JSON.stringify(data)}`);
                 }
@@ -317,6 +351,8 @@
                 return;
             }
             const msg = messageInput.value;
+            checkoutLink.classList.add("hidden");
+            checkoutLink.removeAttribute("href");
             socket.send(JSON.stringify({ message: msg }));
             writeLog(`Sent: ${msg}`);
         });

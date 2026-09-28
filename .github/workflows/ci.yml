@@ -26,6 +26,16 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     env:
       SECRET_KEY: ci-secret-key-not-used-in-production
       DEBUG: "False"
@@ -35,6 +45,7 @@ jobs:
       DB_PASSWORD: postgres
       DB_HOST: localhost
       DB_PORT: "5432"
+      REDIS_URL: redis://localhost:6379/0
       # The embedding model is never loaded in tests - retrieval is patched -
       # so torch stays out of the CI image entirely.
       EMBEDDING_MODEL_NAME: intfloat/multilingual-e5-small
@@ -66,3 +77,14 @@ jobs:
 
       - name: Reference data is valid
         run: python manage.py migrate && python manage.py validate_data --fail
+
+  deploy:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Trigger Render deployment
+        env:
+          DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: curl --fail --show-error --request POST "$DEPLOY_HOOK_URL"

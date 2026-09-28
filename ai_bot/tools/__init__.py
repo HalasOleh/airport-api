@@ -17,7 +17,7 @@ import logging
 from airports.models import SeatClass
 from tickets.models import Ticket
 
-from ai_bot.tools.booking_tools import get_my_bookings
+from ai_bot.tools.booking_tools import create_checkout_link, get_my_bookings
 from ai_bot.tools.common import MAX_LIMIT
 from ai_bot.tools.contact_tools import get_contacts
 from ai_bot.tools.flight_tools import get_flight_seats, search_flights
@@ -153,6 +153,37 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "create_checkout_link",
+            "description": (
+                "Reserve selected seats for the authenticated user and create a "
+                "secure Stripe Checkout link. This changes booking state: call "
+                "it only after the user explicitly confirms the exact flight, "
+                "seat numbers and displayed total. Never ask for card details."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "flight_id": {
+                        "type": "integer",
+                        "description": "Internal flight id returned by search_flights.",
+                    },
+                    "seat_numbers": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "minItems": 1,
+                        "description": (
+                            "Plain seat numbers confirmed by the user, such as [5, 6]."
+                        ),
+                    },
+                },
+                "required": ["flight_id", "seat_numbers"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "lookup_reference",
             "description": (
                 "Look up airports, cities, countries, airlines or airplanes by "
@@ -264,6 +295,7 @@ TOOL_REGISTRY  = {
     "search_flights": (search_flights, False),
     "get_flight_seats": (get_flight_seats, False),
     "get_my_bookings": (get_my_bookings, True),
+    "create_checkout_link": (create_checkout_link, True),
     "lookup_reference": (lookup_reference, False),
     "get_contacts": (get_contacts, False),
     "get_weather": (get_weather, False),

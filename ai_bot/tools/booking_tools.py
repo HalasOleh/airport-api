@@ -5,9 +5,74 @@ user instead of letting the model supply one.
 """
 import logging
 
+from django.utils import timezone
+
 from ai_bot.tools.common import clamp_limit, money
 
+from tickets.models import Order, Ticket
+from tickets.services.booking import (
+    BookingError,
+    cancel_reservation,
+    reserve_seats,
+)
+from tickets.services.checkout import CheckoutError, create_checkout_session
+
+
 logger = logging.getLogger(__name__)
+
+
+def _serialise_checkout(order: Order, checkout: dict) -> dict:
+    """Shape domain and Stripe data for the language model."""
+    tickets = list(
+        order.tickets.select_related(
+            "flight__from_airport",
+            "flight__to_airport",
+            "seat",
+        ).order_by("seat__seat_number")
+    )
+    flight = tickets[0].flight
+
+    return {
+        "checkout_url": checkout["checkout_url"],
+        "order_id": order.pk,
+        "total": money(checkout["amount_cents"]),
+        "currency": checkout["currency"].upper(),
+        "booked_until": order.booked_until.isoformat(),
+        "route": {
+            "from": flight.from_airport.code,
+            "to": flight.to_airport.code,
+        },
+        "departure": timezone.localtime(flight.departure).isoformat(),
+        "seat_numbers": [ticket.seat.seat_number for ticket in tickets],
+    }
+
+
+def create_checkout_link(user=None, flight_id=None, seat_numbers=None) -> dict:
+    """Reserve selected seats and return a hosted Stripe payment link."""
+    if user is None or not getattr(user, "is_authenticated", False):
+        return {"error": "You need to be signed in before booking a flight."}
+
+    try:
+        order = reserve_seats(user, flight_id, seat_numbers)
+    except BookingError as exc:
+        return {"error": str(exc)}
+
+    try:
+        checkout = create_checkout_session(order)
+    except CheckoutError as exc:
+        cancel_reservation(order)
+        return {"error": str(exc)}
+    except Exception:
+        logger.exception("Stripe Checkout creation failed for order %s", order.pk)
+        cancel_reservation(order)
+        return {
+            "error": (
+                "The secure payment page could not be created. "
+                "The seats were released; please try again."
+            )
+        }
+
+    return _serialise_checkout(order, checkout)
 
 
 def _serialise_ticket(ticket) -> dict:
@@ -49,7 +114,6 @@ def get_my_bookings(user=None, status=None, limit=None) -> dict:
     Payment rows are never touched: stripe_session_id and stripe_payment_intent
     have no business in a chat transcript.
     """
-    from tickets.models import Ticket
 
     if user is None or not getattr(user, "is_authenticated", False):
         return {"error": "You need to be signed in before I can look up your bookings."}
