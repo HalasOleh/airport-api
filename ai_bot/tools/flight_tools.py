@@ -11,6 +11,8 @@ from django.utils import timezone
 from airports.models import Flight, Seat, SeatClass
 from ai_bot.tools.common import airport_q, clamp_limit, day_range, money
 
+from tickets.models import Ticket
+
 logger = logging.getLogger(__name__)
 
 # Listing every seat of an A320 would spend 180 rows of context on something
@@ -200,7 +202,7 @@ def get_flight_seats(flight_id=None, seat_class=None) -> dict:
             "detail": "This flight has no airplane assigned, so it has no seats.",
         }
 
-    from tickets.models import Ticket
+
 
     seats = Seat.objects.filter(airplane_id=flight.airplane_id)
     if seat_class:

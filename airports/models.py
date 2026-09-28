@@ -97,7 +97,7 @@ class Airline(models.Model):
         # perfectly good integer. Range checks belong on a numeric field anyway.
         validators=[
             MinValueValidator(1900, message="Founded year must be 1900 or later."),
-            MaxValueValidator(2099, message="Founded year must be 2099 or earlier."),
+            MaxValueValidator(2040, message="Founded year must be 2040 or earlier."),
         ],
     )
     headquarters = models.CharField(

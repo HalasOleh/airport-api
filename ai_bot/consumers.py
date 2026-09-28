@@ -18,6 +18,7 @@ from google.genai import types as genai_types
 from openai import AsyncOpenAI
 
 from ai_bot.models import ChatDialog, ChatMessage
+from ai_bot.payment_safety import contains_payment_card_number
 from ai_bot.prompt import build_system_prompt
 from ai_bot.tools import TOOL_SCHEMAS, call_tool, gemini_tools
 
@@ -260,6 +261,17 @@ class TestConsumer(AsyncWebsocketConsumer):
             self.provider = None
             return
 
+        # Reject the message before it reaches conversation history, the model,
+        # PostgreSQL or Redis. Payment data belongs only on Stripe Checkout.
+        if contains_payment_card_number(user_message):
+            await self.send(text_data=json.dumps({
+                "error": (
+                    "For your security, do not send card numbers in chat. "
+                    "Enter payment details only on the Stripe Checkout page."
+                ),
+            }))
+            return
+
         self.messages.append({"role": "user", "content": user_message})
         if self.dialog:
             await save_chat_message(
@@ -269,15 +281,30 @@ class TestConsumer(AsyncWebsocketConsumer):
             )
 
         try:
+            # A checkout URL is valid only for the current user turn. A later
+            # unrelated reply must never repeat a stale payment link.
+            self.checkout_url = None
             reply_text = await self.generate_reply()
         except Exception:
             # An upstream/model failure should surface as an error frame, not
             # kill the socket and lose the conversation.
             logger.exception("Failed to generate a reply via %s", self.provider)
-            await self.send(text_data=json.dumps({"error": "Failed to generate a reply"}))
-            return
+            if self.checkout_url:
+                # The side effect already succeeded. Do not hide the payment
+                # page merely because the provider failed while wording the
+                # final answer.
+                reply_text = (
+                    "Your seats were reserved. Use the secure Stripe Checkout "
+                    "link below to complete payment."
+                )
+            else:
+                await self.send(text_data=json.dumps({"error": "Failed to generate a reply"}))
+                return
 
-        await self.send(text_data=json.dumps({"reply": reply_text}))
+        response_data = {"reply": reply_text}
+        if self.checkout_url:
+            response_data["checkout_url"] = self.checkout_url
+        await self.send(text_data=json.dumps(response_data))
         if self.dialog and reply_text:
             await save_chat_message(
                 self.dialog.id,
@@ -306,7 +333,18 @@ class TestConsumer(AsyncWebsocketConsumer):
             return {"error": f"Could not read the arguments for {name} as JSON."}
 
         logger.info("Tool call %s(%s)", name, arguments)
-        return await database_sync_to_async(call_tool)(name, arguments, self.user)
+        result = await database_sync_to_async(call_tool)(name, arguments, self.user)
+        self.remember_checkout_url(result)
+        return result
+
+    def remember_checkout_url(self, result):
+        """Expose only a server-produced HTTPS Checkout URL to the browser."""
+        if not isinstance(result, dict):
+            return
+
+        checkout_url = result.get("checkout_url")
+        if isinstance(checkout_url, str) and checkout_url.startswith("https://"):
+            self.checkout_url = checkout_url
 
     async def generate_reply_openai(self):
         client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
@@ -408,6 +446,7 @@ class TestConsumer(AsyncWebsocketConsumer):
                 result = await database_sync_to_async(call_tool)(
                     function_call.name, dict(function_call.args or {}), self.user
                 )
+                self.remember_checkout_url(result)
                 parts.append(
                     genai_types.Part.from_function_response(
                         name=function_call.name, response=result

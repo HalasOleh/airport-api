@@ -1,5 +1,3 @@
-from decimal import Decimal
-
 from rest_framework import viewsets
 from tickets.models import Ticket, Order
 from tickets.serializers import(
@@ -22,6 +20,7 @@ from rest_framework.generics import get_object_or_404
 from django.db import transaction
 
 from tickets.services.smtp import send_payment_confirmation_email
+from tickets.services.checkout import CheckoutError, create_checkout_session
 from .models import Payment
 
 import logging
@@ -107,52 +106,18 @@ class CreateCheckoutSessionView(APIView):
         if order is None:
             return Response({"detail": "Order not found."}, status=http_status.HTTP_404_NOT_FOUND)
 
-        if order.expire():
-            return Response({"detail": "Booking expired. Order was cancelled."}, status=http_status.HTTP_400_BAD_REQUEST)
+        try:
+            checkout = create_checkout_session(order)
+        except CheckoutError as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=exc.status_code,
+            )
 
-        if order.status != Order.Status.PENDING:
-            return Response({"detail": "Order is no longer pending."}, status=http_status.HTTP_400_BAD_REQUEST)
-
-        tickets = order.tickets.all()
-        if not tickets:
-            return Response({"detail": "Order has no tickets."}, status=http_status.HTTP_400_BAD_REQUEST)
-
-        line_items = [
-            {
-                "price_data": {
-                    "currency": "usd",
-                    "unit_amount": ticket.price,  # in cents
-                    "product_data": {
-                        "name": f"Ticket #{ticket.id} -- {ticket.flight}",
-                    },
-                },
-                "quantity": 1,
-            }
-            for ticket in tickets
-        ]
-
-        logger.info(f"Creating Stripe Checkout session for order {order.id}"),
-        session = stripe.checkout.Session.create(
-            payment_method_types=["card"], # Stripe chose by himself what show but here we can add more payment methods like ["card", "paypal"]
-            line_items=line_items, # user itmes data
-            mode="payment",# or "subscription" or "setup"
-            success_url=f"{settings.BASE_URL}/tickets/payments/success/?session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=f"{settings.BASE_URL}/tickets/payments/cancel/",# change url to your frontend cancel page
-            metadata={"order_id": order.id},# stripe will send this data to webhook we can sand different data
+        return Response(
+            {"checkout_url": checkout["checkout_url"]},
+            status=http_status.HTTP_201_CREATED,
         )
-
-        Payment.objects.create(#1
-            order=order,
-            stripe_session_id=session.id,
-            stripe_payment_intent=session.payment_intent or "",
-
-            amount=Decimal(order.price) / Decimal(100),  # DecimalField — convert in dollars from cents, Decima is used to avoid floating-point precision issues
-
-            currency="usd",
-            status=Payment.Status.PENDING,
-        )
-
-        return Response({"checkout_url": session.url}, status=http_status.HTTP_201_CREATED)#2
 
 
 class StripeWebhookView(APIView):

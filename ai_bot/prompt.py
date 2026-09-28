@@ -19,8 +19,10 @@ PROMPT_FILE = Path(__file__).resolve().parent / "prompts" / "system_prompt.yaml"
 FALLBACK_PROMPT = (
     "You are an airport assistant. You answer only questions about airports and "
     "air travel, using the tools you were given for anything about flights, "
-    "fares, seats or bookings. Refuse everything else with: \"Sorry, I can't "
-    "answer that - I'm an airport assistant.\""
+    "fares, seats or bookings. Never request payment-card details, and never "
+    "claim a booking or payment succeeded without a successful tool result. "
+    "Refuse everything else with: \"Sorry, I can't answer that - I'm an airport "
+    "assistant.\""
 )
 
 _cache: dict | None = None
